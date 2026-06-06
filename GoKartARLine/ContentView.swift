@@ -135,10 +135,12 @@ struct ContentView: View {
 }
 
 private struct TrackListView: View {
+    @EnvironmentObject private var locationManager: LocationManager
     @EnvironmentObject private var manager: TrackDataManager
     @Environment(\.dismiss) private var dismiss
     @State private var renamingTrack: TrackData?
     @State private var newName = ""
+    @State private var showingAITrackGenerator = false
 
     var body: some View {
         NavigationStack {
@@ -158,7 +160,15 @@ private struct TrackListView: View {
                 .onDelete(perform: manager.deleteTracks)
             }
             .navigationTitle("已导入赛道")
-            .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("完成") { dismiss() } } }
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) { Button("AI生成") { showingAITrackGenerator = true } }
+                ToolbarItem(placement: .topBarTrailing) { Button("完成") { dismiss() } }
+            }
+            .sheet(isPresented: $showingAITrackGenerator) {
+                AITrackGeneratorView()
+                    .environmentObject(manager)
+                    .environmentObject(locationManager)
+            }
             .alert("重命名赛道", isPresented: Binding(get: { renamingTrack != nil }, set: { if !$0 { renamingTrack = nil } })) {
                 TextField("赛道名称", text: $newName)
                 Button("保存") { if let renamingTrack { manager.rename(track: renamingTrack, to: newName) }; renamingTrack = nil }
@@ -167,4 +177,5 @@ private struct TrackListView: View {
         }
     }
 }
+
 

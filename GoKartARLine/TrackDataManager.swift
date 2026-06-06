@@ -36,6 +36,12 @@ final class TrackDataManager: ObservableObject {
         } catch { errorMessage = "导入失败：\(error.localizedDescription)" }
     }
 
+    func addGeneratedTrack(_ track: TrackData) {
+        tracks.append(track)
+        selectedTrackID = track.id
+        saveTracks()
+    }
+
     func deleteTracks(at offsets: IndexSet) {
         tracks.remove(atOffsets: offsets)
         if let selectedTrackID, !tracks.contains(where: { $0.id == selectedTrackID }) { self.selectedTrackID = tracks.first?.id }
@@ -99,3 +105,4 @@ final class GPXTrackConverter: NSObject, XMLParserDelegate {
         zip(points, points.dropFirst()).reduce(0) { $0 + GeoConverter.distanceMeters(from: $1.0.coordinate, to: $1.1.coordinate) }
     }
 }
+
