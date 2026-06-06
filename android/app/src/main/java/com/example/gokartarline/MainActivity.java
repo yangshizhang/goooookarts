@@ -5,6 +5,7 @@ import android.app.*;
 import android.content.*;
 import android.content.pm.PackageManager;
 import android.graphics.*;
+import android.graphics.drawable.*;
 import android.graphics.SurfaceTexture;
 import android.hardware.camera2.*;
 import android.location.*;
@@ -55,27 +56,90 @@ public class MainActivity extends Activity {
         status = new TextView(this);
         status.setTextColor(Color.WHITE);
         status.setTextSize(17);
-        status.setPadding(18, 12, 18, 12);
-        status.setBackgroundColor(0x77000000);
-        root.addView(status, new FrameLayout.LayoutParams(-2, -2, Gravity.TOP | Gravity.START));
-        LinearLayout bar = new LinearLayout(this);
+        status.setPadding(dp(18), dp(12), dp(18), dp(12));
+        status.setBackground(glassPanel(22, 190));
+        status.setElevation(dp(8));
+        FrameLayout.LayoutParams statusParams = new FrameLayout.LayoutParams(-2, -2, Gravity.TOP | Gravity.START);
+        statusParams.setMargins(dp(14), dp(14), dp(14), dp(14));
+        root.addView(status, statusParams);
+        LinearLayout bar = glassContainer(999, 166);
         bar.setGravity(Gravity.CENTER);
-        bar.setPadding(8, 8, 8, 8);
-        bar.setBackgroundColor(0x66000000);
+        bar.setPadding(dp(10), dp(8), dp(10), dp(8));
         addButton(bar, "Import", v -> importTrack());
         addButton(bar, "Tracks", v -> showTrackList());
         addButton(bar, "Map Draw", v -> showMapDrawer());
         addButton(bar, "AI", v -> showAISettings());
         addButton(bar, "Settings", v -> showSettings());
-        root.addView(bar, new FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL));
+        FrameLayout.LayoutParams barParams = new FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL);
+        barParams.setMargins(dp(18), dp(18), dp(18), dp(18));
+        root.addView(bar, barParams);
         setContentView(root);
     }
 
     private void addButton(LinearLayout parent, String text, View.OnClickListener listener) {
         Button b = new Button(this);
         b.setText(text);
+        applyGlassButton(b);
         b.setOnClickListener(listener);
-        parent.addView(b);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-2, dp(56));
+        lp.setMargins(dp(6), 0, dp(6), 0);
+        parent.addView(b, lp);
+    }
+
+
+    private int dp(float value) { return Math.round(value * getResources().getDisplayMetrics().density); }
+
+    private Drawable glassPanel(float radiusDp, int alpha) {
+        return new GlassPanelDrawable(dp(radiusDp), alpha);
+    }
+
+    private LinearLayout glassContainer(float radiusDp, int alpha) {
+        LinearLayout layout = new LinearLayout(this);
+        layout.setBackground(glassPanel(radiusDp, alpha));
+        layout.setElevation(dp(10));
+        return layout;
+    }
+
+    private void applyGlassButton(Button button) {
+        button.setAllCaps(false);
+        button.setTextColor(Color.WHITE);
+        button.setTextSize(14);
+        button.setMinHeight(dp(48));
+        button.setMinWidth(dp(108));
+        button.setPadding(dp(18), 0, dp(18), 0);
+        StateListDrawable states = new StateListDrawable();
+        states.addState(new int[]{android.R.attr.state_pressed}, glassPanel(14, 225));
+        states.addState(new int[]{}, glassPanel(14, 155));
+        button.setBackground(states);
+        button.setElevation(dp(6));
+    }
+
+    private AlertDialog showGlassDialog(AlertDialog dialog) {
+        dialog.setOnShowListener(d -> {
+            Window window = dialog.getWindow();
+            if (window != null) {
+                window.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
+                View decor = window.getDecorView();
+                decor.setPadding(dp(12), dp(12), dp(12), dp(12));
+                decor.setBackground(glassPanel(26, 218));
+                decor.setElevation(dp(16));
+            }
+            Button positive = dialog.getButton(AlertDialog.BUTTON_POSITIVE);
+            Button negative = dialog.getButton(AlertDialog.BUTTON_NEGATIVE);
+            Button neutral = dialog.getButton(AlertDialog.BUTTON_NEUTRAL);
+            if (positive != null) applyGlassButton(positive);
+            if (negative != null) applyGlassButton(negative);
+            if (neutral != null) applyGlassButton(neutral);
+        });
+        dialog.show();
+        return dialog;
+    }
+
+    private LinearLayout glassDialogBox() {
+        LinearLayout box = glassContainer(22, 130);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(24), dp(18), dp(24), dp(12));
+        return box;
     }
 
     private void requestCameraIfNeeded() {
@@ -139,28 +203,29 @@ public class MainActivity extends Activity {
     private void showTrackList() {
         String[] names = new String[tracks.size()];
         for (int i = 0; i < tracks.size(); i++) names[i] = tracks.get(i).name + " | " + tracks.get(i).points.size() + " pts";
-        new AlertDialog.Builder(this).setTitle("Track Manager").setItems(names, (d, which) -> selectTrack(which)).setPositiveButton("Rename", (d, w) -> renameSelected()).setNegativeButton("Delete", (d, w) -> deleteSelected()).setNeutralButton("Close", null).show();
+        AlertDialog dialog = new AlertDialog.Builder(this).setTitle("Track Manager").setItems(names, (d, which) -> selectTrack(which)).setPositiveButton("Rename", (d, w) -> renameSelected()).setNegativeButton("Delete", (d, w) -> deleteSelected()).setNeutralButton("Close", null).create();
+        showGlassDialog(dialog);
     }
 
-    private void renameSelected() { if (selectedTrack < 0) return; EditText input = new EditText(this); input.setText(tracks.get(selectedTrack).name); new AlertDialog.Builder(this).setTitle("Rename").setView(input).setPositiveButton("Save", (d, w) -> { tracks.get(selectedTrack).name = input.getText().toString(); saveTracks(); selectTrack(selectedTrack); }).show(); }
+    private void renameSelected() { if (selectedTrack < 0) return; EditText input = new EditText(this); input.setText(tracks.get(selectedTrack).name); showGlassDialog(new AlertDialog.Builder(this).setTitle("Rename").setView(input).setPositiveButton("Save", (d, w) -> { tracks.get(selectedTrack).name = input.getText().toString(); saveTracks(); selectTrack(selectedTrack); }).create()); }
     private void deleteSelected() { if (selectedTrack < 0) return; tracks.remove(selectedTrack); selectedTrack = Math.min(selectedTrack, tracks.size() - 1); saveTracks(); if (selectedTrack >= 0) selectTrack(selectedTrack); else overlay.setTrack(new ArrayList<>()); }
 
     private void showSettings() {
-        LinearLayout box = new LinearLayout(this); box.setOrientation(LinearLayout.VERTICAL); box.setPadding(32, 16, 32, 8);
+        LinearLayout box = glassDialogBox();
         SeekBar distance = new SeekBar(this); distance.setMax(170); distance.setProgress((int) renderDistance - 30); box.addView(label("Render distance 30-200m")); box.addView(distance);
         SeekBar height = new SeekBar(this); height.setMax(160); height.setProgress((int) (lineHeight + 80)); box.addView(label("Line height -80 to 80px")); box.addView(height);
         CheckBox low = new CheckBox(this); low.setText("720p low heat mode (off = 1080p)"); low.setChecked(lowHeatMode); box.addView(low);
-        new AlertDialog.Builder(this).setTitle("Settings").setView(box).setPositiveButton("Save", (d, w) -> { renderDistance = 30 + distance.getProgress(); lineHeight = height.getProgress() - 80; lowHeatMode = low.isChecked(); overlay.setRenderDistance(renderDistance); overlay.setVerticalOffset(lineHeight); prefs.edit().putLong("renderDistance", Double.doubleToRawLongBits(renderDistance)).putFloat("lineHeight", lineHeight).putBoolean("lowHeat", lowHeatMode).apply(); restartCamera(); setStatus("Settings saved"); }).show();
+        showGlassDialog(new AlertDialog.Builder(this).setTitle("Settings").setView(box).setPositiveButton("Save", (d, w) -> { renderDistance = 30 + distance.getProgress(); lineHeight = height.getProgress() - 80; lowHeatMode = low.isChecked(); overlay.setRenderDistance(renderDistance); overlay.setVerticalOffset(lineHeight); prefs.edit().putLong("renderDistance", Double.doubleToRawLongBits(renderDistance)).putFloat("lineHeight", lineHeight).putBoolean("lowHeat", lowHeatMode).apply(); restartCamera(); setStatus("Settings saved"); }).create());
     }
-    private TextView label(String s) { TextView v = new TextView(this); v.setText(s); v.setTextSize(16); return v; }
+    private TextView label(String s) { TextView v = new TextView(this); v.setText(s); v.setTextSize(16); v.setTextColor(Color.WHITE); v.setPadding(0, dp(10), 0, dp(4)); return v; }
 
     private void showAISettings() {
-        LinearLayout box = new LinearLayout(this); box.setOrientation(LinearLayout.VERTICAL); box.setPadding(32, 16, 32, 8);
+        LinearLayout box = glassDialogBox();
         EditText key = new EditText(this); key.setHint("AI API Key"); key.setText(prefs.getString("apiKey", ""));
         EditText base = new EditText(this); base.setHint("Base URL"); base.setText(prefs.getString("baseUrl", "https://api.openai.com/v1"));
         EditText model = new EditText(this); model.setHint("Model"); model.setText(prefs.getString("model", "gpt-4.1-mini"));
         box.addView(key); box.addView(base); box.addView(model);
-        new AlertDialog.Builder(this).setTitle("AI Settings").setView(box).setPositiveButton("Save", (d, w) -> prefs.edit().putString("apiKey", key.getText().toString()).putString("baseUrl", base.getText().toString()).putString("model", model.getText().toString()).apply()).show();
+        showGlassDialog(new AlertDialog.Builder(this).setTitle("AI Settings").setView(box).setPositiveButton("Save", (d, w) -> prefs.edit().putString("apiKey", key.getText().toString()).putString("baseUrl", base.getText().toString()).putString("model", model.getText().toString()).apply()).create());
     }
 
     private void showMapDrawer() { setContentView(new MapDrawerView(this)); }
@@ -182,15 +247,51 @@ public class MainActivity extends Activity {
 
     final class MapDrawerView extends LinearLayout {
         final DrawCanvas canvas; final EditText search;
-        MapDrawerView(Context c) { super(c); setOrientation(VERTICAL); search = new EditText(c); search.setHint("Search place, then draw track"); Button find = new Button(c); find.setText("Search"); Button close = new Button(c); close.setText("Close Loop"); Button ai = new Button(c); ai.setText("AI Brake Zones"); Button home = new Button(c); home.setText("Back"); LinearLayout top = new LinearLayout(c); top.addView(search, new LinearLayout.LayoutParams(0, -2, 1)); top.addView(find); top.addView(close); top.addView(ai); top.addView(home); addView(top); canvas = new DrawCanvas(c); addView(canvas, new LinearLayout.LayoutParams(-1, 0, 1)); find.setOnClickListener(v -> searchPlace()); close.setOnClickListener(v -> canvas.closeLoop()); ai.setOnClickListener(v -> generateFromDrawing()); home.setOnClickListener(v -> backHome()); }
+        MapDrawerView(Context c) { super(c); setOrientation(VERTICAL); setPadding(dp(12), dp(12), dp(12), dp(12)); setBackgroundColor(Color.rgb(18, 22, 24)); search = new EditText(c); search.setHint("Search place, then draw track"); search.setTextColor(Color.WHITE); search.setHintTextColor(0xAAFFFFFF); search.setBackground(glassPanel(14, 120)); search.setPadding(dp(12), 0, dp(12), 0); Button find = new Button(c); find.setText("Search"); Button close = new Button(c); close.setText("Close Loop"); Button ai = new Button(c); ai.setText("AI Brake Zones"); Button home = new Button(c); home.setText("Back"); LinearLayout top = glassContainer(24, 160); top.setPadding(dp(10), dp(8), dp(10), dp(8)); top.addView(search, new LinearLayout.LayoutParams(0, dp(52), 1)); applyGlassButton(find); applyGlassButton(close); applyGlassButton(ai); applyGlassButton(home); top.addView(find); top.addView(close); top.addView(ai); top.addView(home); addView(top); canvas = new DrawCanvas(c); LinearLayout.LayoutParams canvasLp = new LinearLayout.LayoutParams(-1, 0, 1); canvasLp.setMargins(0, dp(12), 0, 0); addView(canvas, canvasLp); find.setOnClickListener(v -> searchPlace()); close.setOnClickListener(v -> canvas.closeLoop()); ai.setOnClickListener(v -> generateFromDrawing()); home.setOnClickListener(v -> backHome()); }
         void searchPlace() { try { List<Address> list = new Geocoder(MainActivity.this).getFromLocationName(search.getText().toString(), 1); if (list != null && !list.isEmpty()) { canvas.centerLat = list.get(0).getLatitude(); canvas.centerLon = list.get(0).getLongitude(); toast("Located; start drawing"); } } catch (Exception e) { toast("Search failed: " + e.getMessage()); } }
         void generateFromDrawing() { if (!canvas.closed()) { toast("Close loop first"); return; } ArrayList<TrackPoint> pts = canvas.toTrackPoints(); new Thread(() -> { try { TrackData t = callAIForBrakeZones(pts); runOnUiThread(() -> { addTrack(t); backHome(); }); } catch (Exception e) { TrackData t = new TrackData(); t.name = "Map Draw Track"; t.points.addAll(pts); t.length = computeLength(pts); markLocalBrakeZones(t.points); runOnUiThread(() -> { addTrack(t); toast("AI failed; local brake zones generated"); backHome(); }); } }).start(); }
     }
 
-    final class DrawCanvas extends View { final Paint p = new Paint(Paint.ANTI_ALIAS_FLAG); final ArrayList<PointF> drawn = new ArrayList<>(); double centerLat = 31.2304, centerLon = 121.4737; DrawCanvas(Context c) { super(c); p.setStrokeWidth(7); p.setStrokeCap(Paint.Cap.ROUND); p.setColor(Color.GREEN); } protected void onDraw(Canvas c) { c.drawColor(Color.rgb(28, 36, 32)); p.setStyle(Paint.Style.FILL); p.setTextSize(34); c.drawText("Draw mode: drag a closed track", 30, 50, p); p.setStyle(Paint.Style.STROKE); for (int i = 1; i < drawn.size(); i++) c.drawLine(drawn.get(i - 1).x, drawn.get(i - 1).y, drawn.get(i).x, drawn.get(i).y, p); } public boolean onTouchEvent(android.view.MotionEvent e) { if (e.getAction() == android.view.MotionEvent.ACTION_DOWN || e.getAction() == android.view.MotionEvent.ACTION_MOVE) { PointF pt = new PointF(e.getX(), e.getY()); if (drawn.isEmpty() || dist(drawn.get(drawn.size() - 1), pt) > 8) { drawn.add(pt); invalidate(); } return true; } return true; } void closeLoop() { if (drawn.size() > 2) { drawn.add(new PointF(drawn.get(0).x, drawn.get(0).y)); invalidate(); } } boolean closed() { return drawn.size() > 3 && dist(drawn.get(0), drawn.get(drawn.size() - 1)) < 20; } float dist(PointF a, PointF b) { return (float) Math.hypot(a.x - b.x, a.y - b.y); } ArrayList<TrackPoint> toTrackPoints() { ArrayList<TrackPoint> out = new ArrayList<>(); double mpp = 0.5, latScale = 111320.0, lonScale = Math.max(Math.cos(Math.toRadians(centerLat)) * 111320.0, 1); for (PointF pt : drawn) { double east = (pt.x - getWidth() / 2.0) * mpp; double north = (getHeight() / 2.0 - pt.y) * mpp; out.add(new TrackPoint(centerLat + north / latScale, centerLon + east / lonScale, 60, "green")); } return out; } }
+    final class DrawCanvas extends View { final Paint p = new Paint(Paint.ANTI_ALIAS_FLAG); final ArrayList<PointF> drawn = new ArrayList<>(); double centerLat = 31.2304, centerLon = 121.4737; DrawCanvas(Context c) { super(c); p.setStrokeWidth(7); p.setStrokeCap(Paint.Cap.ROUND); p.setColor(Color.GREEN); } protected void onDraw(Canvas c) { c.drawColor(Color.rgb(18, 22, 24)); p.setStyle(Paint.Style.FILL); p.setTextSize(34); c.drawText("Draw mode: drag a closed track", 30, 50, p); p.setStyle(Paint.Style.STROKE); for (int i = 1; i < drawn.size(); i++) c.drawLine(drawn.get(i - 1).x, drawn.get(i - 1).y, drawn.get(i).x, drawn.get(i).y, p); } public boolean onTouchEvent(android.view.MotionEvent e) { if (e.getAction() == android.view.MotionEvent.ACTION_DOWN || e.getAction() == android.view.MotionEvent.ACTION_MOVE) { PointF pt = new PointF(e.getX(), e.getY()); if (drawn.isEmpty() || dist(drawn.get(drawn.size() - 1), pt) > 8) { drawn.add(pt); invalidate(); } return true; } return true; } void closeLoop() { if (drawn.size() > 2) { drawn.add(new PointF(drawn.get(0).x, drawn.get(0).y)); invalidate(); } } boolean closed() { return drawn.size() > 3 && dist(drawn.get(0), drawn.get(drawn.size() - 1)) < 20; } float dist(PointF a, PointF b) { return (float) Math.hypot(a.x - b.x, a.y - b.y); } ArrayList<TrackPoint> toTrackPoints() { ArrayList<TrackPoint> out = new ArrayList<>(); double mpp = 0.5, latScale = 111320.0, lonScale = Math.max(Math.cos(Math.toRadians(centerLat)) * 111320.0, 1); for (PointF pt : drawn) { double east = (pt.x - getWidth() / 2.0) * mpp; double north = (getHeight() / 2.0 - pt.y) * mpp; out.add(new TrackPoint(centerLat + north / latScale, centerLon + east / lonScale, 60, "green")); } return out; } }
 
     private TrackData callAIForBrakeZones(ArrayList<TrackPoint> pts) throws Exception { String key = prefs.getString("apiKey", ""); if (key.isEmpty()) throw new IOException("missing key"); String base = prefs.getString("baseUrl", "https://api.openai.com/v1"); String model = prefs.getString("model", "gpt-4.1-mini"); JSONArray arr = new JSONArray(); for (TrackPoint p : pts) { JSONObject o = new JSONObject(); o.put("latitude", p.latitude); o.put("longitude", p.longitude); arr.put(o); } JSONObject body = new JSONObject(); body.put("model", model); body.put("temperature", 0.1); body.put("max_tokens", 12000); JSONArray msgs = new JSONArray(); msgs.put(new JSONObject().put("role", "system").put("content", "Generate JSON for a closed kart track. points include latitude longitude speed color. color only green/orange/red. Mark red/orange before corners. Keep input shape. Output JSON only.")); msgs.put(new JSONObject().put("role", "user").put("content", arr.toString())); body.put("messages", msgs); HttpURLConnection con = (HttpURLConnection) new URL(base + "/chat/completions").openConnection(); con.setRequestMethod("POST"); con.setRequestProperty("Authorization", "Bearer " + key); con.setRequestProperty("Content-Type", "application/json"); con.setDoOutput(true); con.getOutputStream().write(body.toString().getBytes(StandardCharsets.UTF_8)); String raw = readStream(con.getInputStream()); String content = new JSONObject(raw).getJSONArray("choices").getJSONObject(0).getJSONObject("message").getString("content"); String json = content.substring(content.indexOf('{'), content.lastIndexOf('}') + 1); return parseTrack(json, "AI Map Track"); }
     private void markLocalBrakeZones(List<TrackPoint> pts) { for (int i = 0; i < pts.size(); i++) { TrackPoint p = pts.get(i); if (i % 24 < 5) pts.set(i, new TrackPoint(p.latitude, p.longitude, 35, "red")); else if (i % 24 < 9) pts.set(i, new TrackPoint(p.latitude, p.longitude, 48, "orange")); } }
+
+
+    static final class GlassPanelDrawable extends Drawable {
+        private final Paint fill = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Paint stroke = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Paint shine = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final float radius;
+        private final int alpha;
+
+        GlassPanelDrawable(float radius, int alpha) {
+            this.radius = radius;
+            this.alpha = alpha;
+            stroke.setStyle(Paint.Style.STROKE);
+            stroke.setStrokeWidth(1.6f);
+            stroke.setColor(Color.argb(105, 255, 255, 255));
+            shine.setStyle(Paint.Style.STROKE);
+            shine.setStrokeWidth(2.2f);
+            shine.setColor(Color.argb(95, 255, 255, 255));
+        }
+
+        @Override public void draw(Canvas canvas) {
+            Rect b = getBounds();
+            RectF r = new RectF(b.left + 1, b.top + 1, b.right - 1, b.bottom - 1);
+            fill.setShader(new LinearGradient(0, r.top, 0, r.bottom,
+                    new int[]{Color.argb(Math.min(245, alpha + 38), 255, 255, 255), Color.argb(alpha, 18, 24, 32), Color.argb(Math.max(110, alpha - 45), 4, 8, 14)},
+                    new float[]{0f, 0.42f, 1f}, Shader.TileMode.CLAMP));
+            canvas.drawRoundRect(r, radius, radius, fill);
+            canvas.drawRoundRect(r, radius, radius, stroke);
+            RectF top = new RectF(r.left + radius * 0.45f, r.top + 3, r.right - radius * 0.45f, r.top + Math.max(8, radius * 0.42f));
+            canvas.drawArc(top, 200, 140, false, shine);
+        }
+
+        @Override public void setAlpha(int a) { fill.setAlpha(a); }
+        @Override public void setColorFilter(android.graphics.ColorFilter cf) { fill.setColorFilter(cf); }
+        @Override public int getOpacity() { return PixelFormat.TRANSLUCENT; }
+    }
 
     static final class TrackData { String name = "Track"; double length; int cornerCount; final ArrayList<TrackPoint> points = new ArrayList<>(); }
     static final class TrackPoint { final double latitude, longitude, speed; final String color; TrackPoint(double latitude, double longitude, double speed, String color) { this.latitude = latitude; this.longitude = longitude; this.speed = speed; this.color = color; } }
