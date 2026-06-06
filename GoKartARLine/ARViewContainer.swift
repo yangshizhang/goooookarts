@@ -17,7 +17,7 @@ struct ARViewContainer: UIViewRepresentable {
         view.delegate = context.coordinator
         view.automaticallyUpdatesLighting = false
         view.preferredFramesPerSecond = settings.powerSavingMode ? 30 : 60
-        context.coordinator.configureSession(for: view)
+        context.coordinator.configureSession(for: view, settings: settings)
         context.coordinator.installNotifications(view: view)
         return view
     }
@@ -29,6 +29,7 @@ struct ARViewContainer: UIViewRepresentable {
         context.coordinator.fusedPose = fusedPose
         context.coordinator.settings = settings
         context.coordinator.mapHeadingOffsetDegrees = mapHeadingOffsetDegrees
+        context.coordinator.updateSessionIfNeeded(for: view)
         context.coordinator.renderDrivingLine(in: view)
     }
 
@@ -40,19 +41,40 @@ struct ARViewContainer: UIViewRepresentable {
         var mapHeadingOffsetDegrees: Double = 0
         private let lineNode = SCNNode()
         private let cameraHeightAboveGround: Float = 1.1
-        private let maximumVisibleDistance: Float = 30
-        private let fadeStartDistance: Float = 10
-        private let lineWidth: Float = 0.4
-        private let groundOffset: Float = 0.01
+        private var appliedVideoResolution: ARVideoResolution?
+        private var maximumVisibleDistance: Float { Float(settings.renderDistance) }
+        private var fadeStartDistance: Float { max(10, maximumVisibleDistance * 0.45) }
+        private var lineWidth: Float { Float(settings.width) }
+        private var groundOffset: Float { Float(settings.heightOffset) }
 
-        func configureSession(for view: ARSCNView) {
+        func configureSession(for view: ARSCNView, settings: ARLineSettings) {
+            self.settings = settings
+            view.scene = SCNScene()
+            view.scene.rootNode.addChildNode(lineNode)
+            runSession(for: view, resetTracking: true)
+        }
+
+        func updateSessionIfNeeded(for view: ARSCNView) {
+            guard appliedVideoResolution != settings.videoResolution else { return }
+            runSession(for: view, resetTracking: false)
+        }
+
+        private func runSession(for view: ARSCNView, resetTracking: Bool) {
             let configuration = ARWorldTrackingConfiguration()
             configuration.worldAlignment = .gravity
             configuration.isLightEstimationEnabled = false
             configuration.environmentTexturing = .none
-            view.scene = SCNScene()
-            view.scene.rootNode.addChildNode(lineNode)
-            view.session.run(configuration, options: [.resetTracking, .removeExistingAnchors])
+            if let format = Self.bestVideoFormat(for: settings.videoResolution) {
+                configuration.videoFormat = format
+            }
+            appliedVideoResolution = settings.videoResolution
+            view.session.run(configuration, options: resetTracking ? [.resetTracking, .removeExistingAnchors] : [])
+        }
+
+        private static func bestVideoFormat(for resolution: ARVideoResolution) -> ARVideoFormat? {
+            ARWorldTrackingConfiguration.supportedVideoFormats.min { lhs, rhs in
+                abs(Int(lhs.imageResolution.height) - resolution.targetHeight) < abs(Int(rhs.imageResolution.height) - resolution.targetHeight)
+            }
         }
 
         func installNotifications(view: ARSCNView) {
@@ -203,19 +225,20 @@ struct ARViewContainer: UIViewRepresentable {
             } else {
                 fade = max(0, 1 - (point.distanceAhead - fadeStartDistance) / (maximumVisibleDistance - fadeStartDistance))
             }
-            return SIMD4<Float>(point.color.x, point.color.y, point.color.z, 0.7 * fade)
+            let alpha = Float(settings.opacity) * fade
+            return SIMD4<Float>(point.color.x, point.color.y, point.color.z, alpha)
         }
 
         private func makeLineMaterial() -> SCNMaterial {
             let material = SCNMaterial()
             material.lightingModel = .constant
-            material.emission.contents = UIColor(red: 0, green: 1, blue: 0.1, alpha: 0.9)
+            material.emission.contents = UIColor(red: 0, green: CGFloat(settings.brightness), blue: 0.1, alpha: CGFloat(settings.opacity))
             material.isDoubleSided = true
             material.transparency = 1
             material.blendMode = .alpha
-            material.readsFromDepthBuffer = false
-            material.writesToDepthBuffer = false
-            material.transparent.contents = UIColor(white: 1, alpha: 0.9)
+            material.readsFromDepthBuffer = !settings.disableDepthTest
+            material.writesToDepthBuffer = !settings.disableDepthTest
+            material.transparent.contents = UIColor(white: 1, alpha: CGFloat(settings.opacity))
             return material
         }
 

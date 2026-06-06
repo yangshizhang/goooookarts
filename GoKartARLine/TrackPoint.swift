@@ -46,10 +46,32 @@ struct TrackData: Codable, Identifiable, Hashable {
     var startCoordinate: CLLocationCoordinate2D? { points.first?.coordinate }
 }
 
+enum ARVideoResolution: String, Codable, CaseIterable {
+    case p720
+    case p1080
+
+    var title: String {
+        switch self {
+        case .p720: return "720p（低发热）"
+        case .p1080: return "1080p（更清晰）"
+        }
+    }
+
+    var targetHeight: Int {
+        switch self {
+        case .p720: return 720
+        case .p1080: return 1080
+        }
+    }
+}
+
 struct ARLineSettings: Codable, Equatable {
     var opacity: Double = 0.82
     var width: Double = 0.5
     var brightness: Double = 1.0
+    var renderDistance: Double = 90
+    var heightOffset: Double = 0.03
+    var videoResolution: ARVideoResolution = .p720
     var powerSavingMode: Bool = false
     var disableDepthTest: Bool = true
     var metricUnits: Bool = true
@@ -106,4 +128,3 @@ enum GeoConverter {
         CLLocation(latitude: lhs.latitude, longitude: lhs.longitude).distance(from: CLLocation(latitude: rhs.latitude, longitude: rhs.longitude))
     }
 }
-
