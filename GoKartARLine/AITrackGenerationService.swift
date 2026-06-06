@@ -27,6 +27,21 @@ struct AITrackGenerationRequest {
     var originCoordinate: CLLocationCoordinate2D
 }
 
+struct AIMapTrackPoint: Codable, Hashable {
+    var latitude: Double
+    var longitude: Double
+    var speed: Double
+    var color: TrackPointColor
+    var remark: String?
+}
+
+struct AIMapTrackResponse: Codable, Hashable {
+    var trackName: String
+    var trackLength: Double
+    var cornerCount: Int
+    var points: [AIMapTrackPoint]
+}
+
 enum AITrackGenerationError: LocalizedError {
     case missingAPIKey
     case invalidImage
@@ -143,6 +158,59 @@ final class AITrackGenerationService {
         return Self.convertToTrackData(aiTrack, origin: request.originCoordinate)
     }
 
+
+    func generateBrakeZones(from coordinates: [CLLocationCoordinate2D], trackName: String) async throws -> TrackData {
+        let key = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !key.isEmpty else { throw AITrackGenerationError.missingAPIKey }
+        guard coordinates.count >= 4 else { throw AITrackGenerationError.noJSON }
+        guard let baseURL else { throw AITrackGenerationError.invalidURL }
+
+        var urlRequest = URLRequest(url: baseURL.appendingPathComponent("chat/completions"))
+        urlRequest.httpMethod = "POST"
+        urlRequest.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
+        urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        urlRequest.timeoutInterval = 180
+
+        let coordinateText = coordinates.enumerated().map { index, coordinate in
+            "{\"index\":\(index),\"latitude\":\(String(format: "%.8f", coordinate.latitude)),\"longitude\":\(String(format: "%.8f", coordinate.longitude))}"
+        }.joined(separator: ",")
+        let length = zip(coordinates, coordinates.dropFirst()).reduce(0.0) { partial, pair in
+            partial + GeoConverter.distanceMeters(from: pair.0, to: pair.1)
+        }
+        let userPrompt = """
+        用户在高德/地图实景底图上手绘了一条首尾相接的卡丁车赛道中心线。请基于这些WGS84经纬度轨迹点生成完整赛道行车线和刹车区。
+        赛道名称：\(trackName)
+        手绘轨迹总长约：\(Int(length))米
+        手绘轨迹点JSON数组：[\(coordinateText)]
+        """
+        let body = ChatCompletionRequest(
+            model: model,
+            messages: [
+                ChatMessage(role: "system", content: [.text(Self.mapBrakeZonePrompt)]),
+                ChatMessage(role: "user", content: [.text(userPrompt)])
+            ],
+            temperature: 0.1,
+            max_tokens: 12000
+        )
+        urlRequest.httpBody = try JSONEncoder().encode(body)
+
+        let (data, response) = try await session.data(for: urlRequest)
+        guard let http = response as? HTTPURLResponse else { throw AITrackGenerationError.invalidResponse }
+        guard (200..<300).contains(http.statusCode) else {
+            let message = String(data: data, encoding: .utf8) ?? "HTTP \(http.statusCode)"
+            throw AITrackGenerationError.server(message)
+        }
+        let completion = try JSONDecoder().decode(ChatCompletionResponse.self, from: data)
+        guard let content = completion.choices.first?.message.content else { throw AITrackGenerationError.noJSON }
+        let jsonText = Self.extractJSONObject(from: content)
+        guard let jsonData = jsonText.data(using: .utf8) else { throw AITrackGenerationError.noJSON }
+        let aiTrack = try JSONDecoder().decode(AIMapTrackResponse.self, from: jsonData)
+        let points = aiTrack.points.map {
+            TrackPoint(latitude: $0.latitude, longitude: $0.longitude, speed: $0.speed, color: $0.color)
+        }
+        return TrackData(trackName: aiTrack.trackName, trackLength: aiTrack.trackLength, cornerCount: aiTrack.cornerCount, points: points, importedAt: Date())
+    }
+
     static func convertToTrackData(_ aiTrack: AITrackResponse, origin: CLLocationCoordinate2D, currentImagePoint: CGPoint? = nil, headingDegrees: Double = 0) -> TrackData {
         let pixelLength = zip(aiTrack.points, aiTrack.points.dropFirst()).reduce(0.0) { partial, pair in
             let dx = pair.1.x - pair.0.x
@@ -215,6 +283,40 @@ final class AITrackGenerationService {
 - 禁止分多次输出
 - 禁止生成穿越草地或障碍物的行车线
 - 禁止轨迹点过密；相邻点应尽量对应约0.5米真实距离
+"""
+    private static let mapBrakeZonePrompt = """
+你是专业卡丁车赛道工程师。用户已经在地图实景底图上画出一条首尾相接的赛道中心线，你必须基于经纬度轨迹生成可直接导入App的JSON。
+
+## 任务
+1. 保留赛道整体形状，必要时把手绘稀疏点重采样为约0.5米间距的平滑闭环轨迹。
+2. 识别直道、弯道、发卡弯和S弯，估算弯道数量。
+3. 为每个输出点生成建议车速 speed，单位 km/h。
+4. 为每个输出点生成 color：green=全油门，orange=松油/入弯准备，red=刹车区。
+5. 刹车区必须出现在弯前，不能只把弯心标红；直道中后段通常为green，入弯前逐渐orange/red，出弯恢复green。
+6. 输出points必须是WGS84经纬度，不要输出像素坐标。
+
+## 输出要求
+只输出纯JSON，不要解释，不要Markdown：
+{
+  "trackName": "赛道名称",
+  "trackLength": 赛道长度米,
+  "cornerCount": 弯道数量,
+  "points": [
+    {
+      "latitude": 31.000000,
+      "longitude": 121.000000,
+      "speed": 55,
+      "color": "green/orange/red",
+      "remark": "普通点/刹车点/入弯点/弯心/出弯点"
+    }
+  ]
+}
+
+## 绝对禁止
+- 禁止输出JSON以外的文字
+- 禁止返回非闭环轨迹
+- 禁止输出少于100个轨迹点
+- 禁止使用除green、orange、red以外的颜色
 """
 }
 

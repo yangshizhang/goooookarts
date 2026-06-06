@@ -141,6 +141,7 @@ private struct TrackListView: View {
     @State private var renamingTrack: TrackData?
     @State private var newName = ""
     @State private var showingAITrackGenerator = false
+    @State private var showingMapTrackDrawer = false
     @State private var calibratingTrack: TrackData?
 
     var body: some View {
@@ -162,11 +163,21 @@ private struct TrackListView: View {
             }
             .navigationTitle("已导入赛道")
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) { Button("AI生成") { showingAITrackGenerator = true } }
+                ToolbarItem(placement: .topBarLeading) {
+                    HStack {
+                        Button("AI生成") { showingAITrackGenerator = true }
+                        Button("地图绘制") { showingMapTrackDrawer = true }
+                    }
+                }
                 ToolbarItem(placement: .topBarTrailing) { Button("完成") { dismiss() } }
             }
             .sheet(isPresented: $showingAITrackGenerator) {
                 AITrackGeneratorView()
+                    .environmentObject(manager)
+                    .environmentObject(locationManager)
+            }
+            .sheet(isPresented: $showingMapTrackDrawer) {
+                MapTrackDrawingView()
                     .environmentObject(manager)
                     .environmentObject(locationManager)
             }
@@ -185,4 +196,3 @@ private struct TrackListView: View {
         }
     }
 }
-
