@@ -1,4 +1,4 @@
-﻿package com.example.gokartarline;
+package com.example.gokartarline;
 
 import android.Manifest;
 import android.app.Activity;
