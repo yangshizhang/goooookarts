@@ -84,7 +84,7 @@ struct TrackMapCalibrationView: View {
             .padding()
             .navigationTitle("校准地图")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("取消") { dismiss() } } }
+            .navigationBarItems(trailing: Button("取消") { dismiss() })
             .onAppear { selectedIndex = min(selectedIndex, max(track.points.count - 1, 0)) }
         }
     }
@@ -156,4 +156,3 @@ struct TrackMapCalibrationView: View {
         return value < 0 ? value + 360 : value
     }
 }
-
