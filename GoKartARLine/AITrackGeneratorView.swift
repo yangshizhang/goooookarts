@@ -128,7 +128,7 @@ struct AITrackGeneratorView: View {
     private func generateTrack() async {
         guard let selectedImage, let finishPoint else { return }
         isGenerating = true
-        message = "AI正在分析赛道并生成约1米分段的行车线，可能需要1-3分钟。"
+        message = "AI正在分析赛道并生成约0.5米分段的平滑行车线，可能需要1-3分钟。"
         do {
             AITrackGenerationService.shared.apiKey = apiKey
             AITrackGenerationService.shared.model = modelID
