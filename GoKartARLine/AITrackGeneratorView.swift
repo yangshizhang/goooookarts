@@ -11,6 +11,7 @@ struct AITrackGeneratorView: View {
     @State private var displayedImageSize: CGSize = .zero
     @State private var finishPoint: CGPoint?
     @State private var apiKey = AITrackGenerationService.shared.apiKey
+    @State private var modelID = AITrackGenerationService.shared.model
     @State private var isGenerating = false
     @State private var message = "选择赛道俯视图，然后点击图片上的起终点位置。"
     @State private var errorMessage: String?
@@ -24,12 +25,15 @@ struct AITrackGeneratorView: View {
                 }
                 .buttonStyle(.borderedProminent)
 
-                SecureField("AI接口Key（保存在本机Keychain）", text: $apiKey)
-                    .textContentType(.password)
-                    .autocorrectionDisabled()
-                    .textInputAutocapitalization(.never)
-                    .padding(12)
-                    .background(.secondary.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
+                VStack(spacing: 10) {
+                    SecureField("AI接口Key（保存在本机Keychain）", text: $apiKey)
+                        .textContentType(.password)
+                    TextField("Model ID", text: $modelID)
+                }
+                .autocorrectionDisabled()
+                .textInputAutocapitalization(.never)
+                .padding(12)
+                .background(.secondary.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
 
                 imageSelectionArea
 
@@ -48,7 +52,7 @@ struct AITrackGeneratorView: View {
                     }
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(selectedImage == nil || finishPoint == nil || apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isGenerating)
+                .disabled(selectedImage == nil || finishPoint == nil || apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || modelID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isGenerating)
             }
             .padding()
             .navigationTitle("AI生成赛道")
@@ -124,6 +128,7 @@ struct AITrackGeneratorView: View {
         message = "AI正在分析赛道并生成≥200个行车线点，可能需要1-3分钟。"
         do {
             AITrackGenerationService.shared.apiKey = apiKey
+            AITrackGenerationService.shared.model = modelID
             let origin = locationManager.fusedPose?.coordinate ?? locationManager.originCoordinate ?? CLLocationCoordinate2D(latitude: 31.234567, longitude: 121.345678)
             let request = AITrackGenerationRequest(image: selectedImage, finishPoint: finishPoint, imageSize: selectedImage.size, originCoordinate: origin)
             let track = try await AITrackGenerationService.shared.generateTrack(request: request)
@@ -158,5 +163,6 @@ struct AITrackGeneratorView: View {
         return CGPoint(x: origin.x + imagePoint.x / max(imageSize.width, 1) * fitted.width, y: origin.y + imagePoint.y / max(imageSize.height, 1) * fitted.height)
     }
 }
+
 
 

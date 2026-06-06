@@ -53,12 +53,24 @@ final class AITrackGenerationService {
     static let shared = AITrackGenerationService()
 
     let baseURL = URL(string: "https://api.tutujin.com/v1")!
-    let model = "claude-3-5-sonnet-20240620"
+    static let defaultModel = "claude-3-5-sonnet-20240620"
     private let apiKeyStoreKey = "ai.track.generator.api.key"
+    private let modelStoreKey = "ai.track.generator.model"
     private let session: URLSession
 
     init(session: URLSession = .shared) {
         self.session = session
+    }
+
+    var model: String {
+        get {
+            let saved = UserDefaults.standard.string(forKey: modelStoreKey)?.trimmingCharacters(in: .whitespacesAndNewlines)
+            return saved?.isEmpty == false ? saved! : Self.defaultModel
+        }
+        set {
+            let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            UserDefaults.standard.set(trimmed.isEmpty ? Self.defaultModel : trimmed, forKey: modelStoreKey)
+        }
     }
 
     var apiKey: String {
@@ -269,4 +281,5 @@ private extension UIImage {
         return renderer.image { _ in draw(in: CGRect(origin: .zero, size: target)) }
     }
 }
+
 

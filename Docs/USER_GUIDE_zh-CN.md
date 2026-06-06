@@ -363,14 +363,15 @@ App 的 `赛道` 页面新增 `AI生成`：
 2. 点击左上角 `AI生成`。
 3. 选择赛道俯视照片。
 4. 点击照片上的起终点/终点位置。
-5. 输入 AI 接口 Key。Key 会保存在本机 Keychain，不写入仓库。
+5. 输入 AI 接口 Key 和 Model ID。Key 会保存在本机 Keychain；Model ID 会保存在本机设置。
 6. 点击 `AI生成并导入赛道`。
 7. AI 返回≥200个像素行车线点后，App 会按当前定位原点转换为内部 WGS84 赛道并自动导入。
 
 当前内置接口配置：
 
 - Base URL：`https://api.tutujin.com/v1`
-- Model：`claude-3-5-sonnet-20240620`
+- 默认 Model：`claude-3-5-sonnet-20240620`，也可以在 App 的 `AI生成` 页面自行修改
 - API 协议：OpenAI 兼容 `POST /chat/completions`
 
 注意：照片本身通常没有真实地理坐标，AI生成结果会按当前GPS位置作为赛道局部坐标原点进行近似转换。正式使用前应在起点附近进行校准，并低速验证行车线位置。
+
