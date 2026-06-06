@@ -74,3 +74,14 @@ JSON 格式：
 ## 安全说明
 
 AR 行车线只作辅助参考，不能替代驾驶员判断。GPS 漂移、IMU 噪声、AR 跟踪失败、赛道数据错误都可能造成行车线偏移。请只在封闭卡丁车场使用，并遵守场地安全规则。
+
+## GitHub Actions 未签名 IPA 构建
+
+仓库已包含 `.github/workflows/build-unsigned-ipa.yml`，会在以下情况使用 GitHub macOS runner 构建：
+
+- 推送到 `main`
+- 手动点击 Actions 页面中的 `Build Unsigned IPA` → `Run workflow`
+
+构建产物会上传为 Actions artifact：`GoKartARLine-unsigned-ipa`，内部文件为 `GoKartARLine-unsigned.ipa`。
+
+注意：该 IPA 使用 `CODE_SIGNING_ALLOWED=NO` 构建，未签名，不能直接安装到普通 iPhone。它适合做编译验证、代码审查和后续再签名流程。真机安装仍需要 Apple Developer 签名、描述文件或其他合法签名方式。
