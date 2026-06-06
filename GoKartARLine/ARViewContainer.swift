@@ -8,6 +8,7 @@ struct ARViewContainer: UIViewRepresentable {
     var originCoordinate: CLLocationCoordinate2D?
     var fusedPose: FusedPose?
     var settings: ARLineSettings
+    var mapHeadingOffsetDegrees: Double = 0
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
@@ -27,6 +28,7 @@ struct ARViewContainer: UIViewRepresentable {
         context.coordinator.originCoordinate = originCoordinate ?? track?.startCoordinate
         context.coordinator.fusedPose = fusedPose
         context.coordinator.settings = settings
+        context.coordinator.mapHeadingOffsetDegrees = mapHeadingOffsetDegrees
         context.coordinator.renderVisibleLineSegments(in: view)
     }
 
@@ -35,6 +37,7 @@ struct ARViewContainer: UIViewRepresentable {
         var originCoordinate: CLLocationCoordinate2D?
         var fusedPose: FusedPose?
         var settings = ARLineSettings()
+        var mapHeadingOffsetDegrees: Double = 0
         private let lineRoot = SCNNode()
         private var lastRenderedTrackID: TrackData.ID?
         private var lastRenderedOrigin: CLLocationCoordinate2D?
@@ -61,6 +64,7 @@ struct ARViewContainer: UIViewRepresentable {
                 lineRoot.childNodes.forEach { $0.removeFromParentNode() }
                 return
             }
+            lineRoot.eulerAngles.y = Float(-mapHeadingOffsetDegrees * .pi / 180.0)
             let originChanged = lastRenderedOrigin?.latitude != originCoordinate.latitude || lastRenderedOrigin?.longitude != originCoordinate.longitude
             guard lastRenderedTrackID != track.id || originChanged || lineRoot.childNodes.isEmpty else { return }
             lastRenderedTrackID = track.id
@@ -130,5 +134,4 @@ private extension SCNVector3 {
 
     static func dot(_ lhs: SCNVector3, _ rhs: SCNVector3) -> Float { lhs.x * rhs.x + lhs.y * rhs.y + lhs.z * rhs.z }
 }
-
 

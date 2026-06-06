@@ -9,6 +9,7 @@ final class LocationManager: NSObject, ObservableObject {
     @Published var statusMessage = "等待传感器初始化"
     @Published var isCalibrated = false
     @Published var originCoordinate: CLLocationCoordinate2D?
+    @Published var mapHeadingOffsetDegrees: Double = 0
 
     private let locationManager = CLLocationManager()
     private let motionManager = CMMotionManager()
@@ -58,6 +59,13 @@ final class LocationManager: NSObject, ObservableObject {
         locationManager.stopUpdatingHeading()
         motionManager.stopDeviceMotionUpdates()
         statusMessage = "传感器已暂停"
+    }
+
+    func applyMapCalibration(coordinate: CLLocationCoordinate2D, headingDegrees: Double) {
+        originCoordinate = coordinate
+        mapHeadingOffsetDegrees = headingDegrees
+        isCalibrated = true
+        statusMessage = "已按地图选择校准位置和方向"
     }
 
     func manualCalibrate(using track: TrackData?) {

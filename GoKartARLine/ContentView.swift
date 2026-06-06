@@ -14,7 +14,7 @@ struct ContentView: View {
 
     var body: some View {
         ZStack {
-            ARViewContainer(track: trackDataManager.selectedTrack, originCoordinate: locationManager.originCoordinate, fusedPose: locationManager.fusedPose, settings: settings)
+            ARViewContainer(track: trackDataManager.selectedTrack, originCoordinate: locationManager.originCoordinate, fusedPose: locationManager.fusedPose, settings: settings, mapHeadingOffsetDegrees: locationManager.mapHeadingOffsetDegrees)
                 .ignoresSafeArea()
             VStack(spacing: 12) {
                 topHUD
@@ -141,6 +141,7 @@ private struct TrackListView: View {
     @State private var renamingTrack: TrackData?
     @State private var newName = ""
     @State private var showingAITrackGenerator = false
+    @State private var calibratingTrack: TrackData?
 
     var body: some View {
         NavigationStack {
@@ -148,7 +149,7 @@ private struct TrackListView: View {
                 ForEach(manager.tracks) { track in
                     Button {
                         manager.selectedTrackID = track.id
-                        dismiss()
+                        calibratingTrack = track
                     } label: {
                         VStack(alignment: .leading) {
                             Text(track.trackName).font(.headline)
@@ -169,6 +170,13 @@ private struct TrackListView: View {
                     .environmentObject(manager)
                     .environmentObject(locationManager)
             }
+            .sheet(item: $calibratingTrack) { track in
+                TrackMapCalibrationView(track: track) { coordinate, heading in
+                    manager.selectedTrackID = track.id
+                    locationManager.applyMapCalibration(coordinate: coordinate, headingDegrees: heading)
+                    dismiss()
+                }
+            }
             .alert("重命名赛道", isPresented: Binding(get: { renamingTrack != nil }, set: { if !$0 { renamingTrack = nil } })) {
                 TextField("赛道名称", text: $newName)
                 Button("保存") { if let renamingTrack { manager.rename(track: renamingTrack, to: newName) }; renamingTrack = nil }
@@ -177,5 +185,4 @@ private struct TrackListView: View {
         }
     }
 }
-
 

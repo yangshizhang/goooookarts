@@ -143,7 +143,7 @@ final class AITrackGenerationService {
         return Self.convertToTrackData(aiTrack, origin: request.originCoordinate)
     }
 
-    private static func convertToTrackData(_ aiTrack: AITrackResponse, origin: CLLocationCoordinate2D) -> TrackData {
+    static func convertToTrackData(_ aiTrack: AITrackResponse, origin: CLLocationCoordinate2D, currentImagePoint: CGPoint? = nil, headingDegrees: Double = 0) -> TrackData {
         let pixelLength = zip(aiTrack.points, aiTrack.points.dropFirst()).reduce(0.0) { partial, pair in
             let dx = pair.1.x - pair.0.x
             let dy = pair.1.y - pair.0.y
@@ -151,11 +151,15 @@ final class AITrackGenerationService {
         }
         let metersPerPixel = pixelLength > 1 ? aiTrack.trackLength / pixelLength : 0.5
         let start = aiTrack.points.first ?? AITrackImagePoint(x: 0, y: 0, speed: 0, color: .green, remark: "起点")
+        let anchor = currentImagePoint.map { AITrackImagePoint(x: $0.x, y: $0.y, speed: 0, color: .green, remark: "当前位置") } ?? start
+        let heading = headingDegrees * .pi / 180.0
         let latitudeMeters = 111_320.0
         let longitudeMeters = max(cos(origin.latitude * .pi / 180.0) * 111_320.0, 1.0)
         let points = aiTrack.points.map { point in
-            let east = (point.x - start.x) * metersPerPixel
-            let north = -(point.y - start.y) * metersPerPixel
+            let imageEast = (point.x - anchor.x) * metersPerPixel
+            let imageNorth = -(point.y - anchor.y) * metersPerPixel
+            let east = imageEast * cos(heading) - imageNorth * sin(heading)
+            let north = imageEast * sin(heading) + imageNorth * cos(heading)
             return TrackPoint(
                 latitude: origin.latitude + north / latitudeMeters,
                 longitude: origin.longitude + east / longitudeMeters,
@@ -183,7 +187,8 @@ final class AITrackGenerationService {
 4.  【行车线生成】：严格按照“外-内-外”经典赛车走线原则生成最优行车线。直道走中线，入弯前向外靠，弯心贴内，出弯向外展开。
 5.  【速度规划】：基于卡丁车通用参数（最高时速80km/h，刹车减速度-0.8g，横向抓地力1.2g）计算每个点的建议车速。
 6.  【颜色标记】：green=全油门区，orange=松油区，red=重刹区，颜色渐变自然，不要突然切换。
-7.  【自我校验2】：检查所有轨迹点是否都在黑色沥青路面上；检查行车线是否平滑连续，没有突变或跳跃；检查轨迹点数量是否≥200个；检查JSON格式是否完全正确，没有任何语法错误。
+7.  【点间距要求】：轨迹点不要过密，相邻点对应真实距离约1米；直道可更稀疏，弯心和刹车区可略密，但整体应像游戏《极限竞速：地平线》的动态行车线一样呈现分段路径，中间保留约1米视觉空格。
+8.  【自我校验2】：检查所有轨迹点是否都在黑色沥青路面上；检查行车线是否平滑连续，没有突变或跳跃；检查点间距是否接近1米且不要过密；检查JSON格式是否完全正确，没有任何语法错误。
 
 ## 【输出要求】
 只输出纯JSON，不要任何其他文字、解释、道歉、说明或思维链，直接输出：
@@ -209,7 +214,7 @@ final class AITrackGenerationService {
 - 禁止输出除了JSON以外的任何内容
 - 禁止分多次输出
 - 禁止生成穿越草地或障碍物的行车线
-- 禁止轨迹点数量少于200个
+- 禁止轨迹点过密；相邻点应尽量对应约1米真实距离
 """
 }
 
@@ -295,6 +300,4 @@ private extension UIImage {
         return renderer.image { _ in draw(in: CGRect(origin: .zero, size: target)) }
     }
 }
-
-
 
