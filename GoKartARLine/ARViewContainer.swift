@@ -109,7 +109,7 @@ struct ARViewContainer: UIViewRepresentable {
                     guard distanceAhead >= 0, distanceAhead <= maximumVisibleDistance else { continue }
                     let lateral = (relative - forward * distanceAhead).length
                     guard lateral <= 8 else { continue }
-                    let color = TrackPointColor.interpolated(from: start.color, to: end.color, progress: progress)
+                    let color = VisibleLinePoint.interpolatedColor(from: start.color, to: end.color, progress: progress)
                     visible.append(VisibleLinePoint(position: position, color: color, distanceAhead: distanceAhead))
                 }
             }
@@ -153,9 +153,9 @@ struct ARViewContainer: UIViewRepresentable {
             let start = SCNVector3(position.x, position.y + 1, position.z)
             let end = SCNVector3(position.x, position.y - 1, position.z)
             let hits = view.scene.rootNode.hitTestWithSegment(from: start, to: end, options: [
-                .ignoreHiddenNodes: true,
-                .boundingBoxOnly: false,
-                .searchMode: SCNHitTestSearchMode.closest.rawValue
+                SCNHitTestOption.ignoreHiddenNodes.rawValue: true,
+                SCNHitTestOption.boundingBoxOnly.rawValue: false,
+                SCNHitTestOption.searchMode.rawValue: SCNHitTestSearchMode.closest.rawValue
             ])
             if let hit = hits.first(where: { abs($0.worldNormal.y) > 0.85 }) {
                 return hit.worldCoordinates.y
@@ -216,6 +216,9 @@ private struct VisibleLinePoint {
         self.color = color
         self.distanceAhead = distanceAhead
     }
+    static func interpolatedColor(from start: SIMD3<Float>, to end: SIMD3<Float>, progress: Float) -> SIMD3<Float> {
+        start + (end - start) * min(max(progress, 0), 1)
+    }
 }
 
 private extension TrackPointColor {
@@ -225,10 +228,6 @@ private extension TrackPointColor {
         case .orange: return SIMD3<Float>(1, 1, 0)
         case .red: return SIMD3<Float>(1, 0, 0)
         }
-    }
-
-    static func interpolated(from start: TrackPointColor, to end: TrackPointColor, progress: Float) -> SIMD3<Float> {
-        start.gradientColor + (end.gradientColor - start.gradientColor) * min(max(progress, 0), 1)
     }
 }
 
