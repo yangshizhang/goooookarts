@@ -39,6 +39,7 @@ struct ARViewContainer: UIViewRepresentable {
         var settings = ARLineSettings()
         var mapHeadingOffsetDegrees: Double = 0
         private let lineNode = SCNNode()
+        private let cameraHeightAboveGround: Float = 1.1
         private let maximumVisibleDistance: Float = 30
         private let fadeStartDistance: Float = 10
         private let lineWidth: Float = 0.4
@@ -70,7 +71,12 @@ struct ARViewContainer: UIViewRepresentable {
         }
 
         func renderDrivingLine(in view: ARSCNView) {
-            lineNode.eulerAngles.y = Float(-mapHeadingOffsetDegrees * .pi / 180.0)
+            guard let camera = view.pointOfView else {
+                lineNode.geometry = nil
+                return
+            }
+            lineNode.eulerAngles = SCNVector3(0, camera.eulerAngles.y, 0)
+            lineNode.position = SCNVector3(camera.worldPosition.x, camera.worldPosition.y - cameraHeightAboveGround, camera.worldPosition.z)
             guard let track, let originCoordinate, track.points.count > 1 else {
                 lineNode.geometry = nil
                 return
@@ -86,7 +92,7 @@ struct ARViewContainer: UIViewRepresentable {
                 return
             }
 
-            lineNode.geometry = makeTriangleStripGeometry(points: sourcePoints, view: view)
+            lineNode.geometry = makeTriangleStripGeometry(points: cameraAlignedPoints(sourcePoints))
         }
 
         private func resampledVisiblePoints(from track: TrackData, origin: CLLocationCoordinate2D, vehiclePosition: SCNVector3) -> [VisibleLinePoint] {
@@ -148,7 +154,17 @@ struct ARViewContainer: UIViewRepresentable {
             return best
         }
 
-        private func makeTriangleStripGeometry(points: [VisibleLinePoint], view: ARSCNView) -> SCNGeometry {
+        private func cameraAlignedPoints(_ points: [VisibleLinePoint]) -> [VisibleLinePoint] {
+            guard points.count > 1 else { return points }
+            let anchor = points[0].position
+            let tangent = (points[1].position - anchor).normalized
+            let rotation = atan2(tangent.x, -tangent.z)
+            return points.map { point in
+                VisibleLinePoint(position: (point.position - anchor).rotatedAroundY(radians: rotation), color: point.color, distanceAhead: point.distanceAhead)
+            }
+        }
+
+        private func makeTriangleStripGeometry(points: [VisibleLinePoint]) -> SCNGeometry {
             var vertices: [SCNVector3] = []
             var colors: [SIMD4<Float>] = []
 
@@ -158,7 +174,7 @@ struct ARViewContainer: UIViewRepresentable {
                 let next = points[min(index + 1, points.count - 1)].position
                 let tangent = (next - previous).normalized
                 let normal = SCNVector3(-tangent.z, 0, tangent.x).normalized
-                let y = groundHeight(near: current, in: view) + groundOffset
+                let y = groundOffset
                 let left = SCNVector3(current.x + normal.x * lineWidth / 2, y, current.z + normal.z * lineWidth / 2)
                 let right = SCNVector3(current.x - normal.x * lineWidth / 2, y, current.z - normal.z * lineWidth / 2)
                 let color = vertexColor(for: points[index])
@@ -180,20 +196,6 @@ struct ARViewContainer: UIViewRepresentable {
             return geometry
         }
 
-        private func groundHeight(near position: SCNVector3, in view: ARSCNView) -> Float {
-            let start = SCNVector3(position.x, position.y + 1, position.z)
-            let end = SCNVector3(position.x, position.y - 1, position.z)
-            let hits = view.scene.rootNode.hitTestWithSegment(from: start, to: end, options: [
-                SCNHitTestOption.ignoreHiddenNodes.rawValue: true,
-                SCNHitTestOption.boundingBoxOnly.rawValue: false,
-                SCNHitTestOption.searchMode.rawValue: SCNHitTestSearchMode.closest.rawValue
-            ])
-            if let hit = hits.first(where: { abs($0.worldNormal.y) > 0.85 }) {
-                return hit.worldCoordinates.y
-            }
-            return -0.01
-        }
-
         private func vertexColor(for point: VisibleLinePoint) -> SIMD4<Float> {
             let fade: Float
             if point.distanceAhead <= fadeStartDistance {
@@ -207,16 +209,13 @@ struct ARViewContainer: UIViewRepresentable {
         private func makeLineMaterial() -> SCNMaterial {
             let material = SCNMaterial()
             material.lightingModel = .constant
-            material.emission.contents = UIColor.white
+            material.emission.contents = UIColor(red: 0, green: 1, blue: 0.1, alpha: 0.9)
             material.isDoubleSided = true
             material.transparency = 1
             material.blendMode = .alpha
             material.readsFromDepthBuffer = false
             material.writesToDepthBuffer = false
-            material.shaderModifiers = [.fragment: """
-            #pragma transparent
-            _output.color = _geometry.color;
-            """]
+            material.transparent.contents = UIColor(white: 1, alpha: 0.9)
             return material
         }
 
@@ -292,7 +291,10 @@ private extension SCNVector3 {
     }
 
     func rotatedAroundY(degrees: Double) -> SCNVector3 {
-        let radians = Float(degrees * .pi / 180.0)
+        rotatedAroundY(radians: Float(degrees * .pi / 180.0))
+    }
+
+    func rotatedAroundY(radians: Float) -> SCNVector3 {
         let cosine = cos(radians)
         let sine = sin(radians)
         return SCNVector3(x * cosine + z * sine, y, -x * sine + z * cosine)
