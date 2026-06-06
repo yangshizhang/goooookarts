@@ -1,0 +1,27 @@
+﻿<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleDevelopmentRegion</key><string>$(DEVELOPMENT_LANGUAGE)</string>
+    <key>CFBundleExecutable</key><string>$(EXECUTABLE_NAME)</string>
+    <key>CFBundleIdentifier</key><string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+    <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
+    <key>CFBundleName</key><string>$(PRODUCT_NAME)</string>
+    <key>CFBundlePackageType</key><string>$(PRODUCT_BUNDLE_PACKAGE_TYPE)</string>
+    <key>CFBundleShortVersionString</key><string>$(MARKETING_VERSION)</string>
+    <key>CFBundleVersion</key><string>$(CURRENT_PROJECT_VERSION)</string>
+    <key>LSRequiresIPhoneOS</key><true/>
+    <key>NSCameraUsageDescription</key><string>需要摄像头显示AR行车线叠加画面。</string>
+    <key>NSLocationWhenInUseUsageDescription</key><string>需要定位来把AI生成的赛道行车线对齐到真实赛道。</string>
+    <key>NSLocationAlwaysAndWhenInUseUsageDescription</key><string>仅在驾驶和校准时使用定位来提升行车线对齐精度。</string>
+    <key>NSMotionUsageDescription</key><string>需要读取IMU传感器以融合GPS并降低定位延迟。</string>
+    <key>NSPhotoLibraryAddUsageDescription</key><string>需要保存带AR行车线的截图到相册。</string>
+    <key>UISupportedInterfaceOrientations</key>
+    <array>
+        <string>UIInterfaceOrientationLandscapeLeft</string>
+        <string>UIInterfaceOrientationLandscapeRight</string>
+        <string>UIInterfaceOrientationPortrait</string>
+    </array>
+    <key>UILaunchScreen</key><dict/>
+</dict>
+</plist>
