@@ -16,7 +16,6 @@ struct ARViewContainer: UIViewRepresentable {
         view.delegate = context.coordinator
         view.automaticallyUpdatesLighting = false
         view.preferredFramesPerSecond = settings.powerSavingMode ? 30 : 60
-        view.preferredFrameRateRange = CAFrameRateRange(minimum: Float(settings.powerSavingMode ? 30 : 60), maximum: Float(settings.powerSavingMode ? 30 : 60), preferred: Float(settings.powerSavingMode ? 30 : 60))
         context.coordinator.configureSession(for: view)
         context.coordinator.installNotifications(view: view)
         return view
@@ -94,8 +93,17 @@ struct ARViewContainer: UIViewRepresentable {
             cylinder.materials = [material]
             let node = SCNNode(geometry: cylinder)
             node.position = SCNVector3((start.x + end.x) / 2, (start.y + end.y) / 2, (start.z + end.z) / 2)
-            node.orientation = SCNQuaternion.rotationBetween(vector: SCNVector3(0, 1, 0), target: vector.normalized)
+            node.orientation = Self.rotationBetween(vector: SCNVector3(0, 1, 0), target: vector.normalized)
             return node
+        }
+
+        private static func rotationBetween(vector from: SCNVector3, target to: SCNVector3) -> SCNQuaternion {
+            let from = from.normalized
+            let to = to.normalized
+            let dot = max(min(SCNVector3.dot(from, to), 1), -1)
+            if dot < -0.9999 { return SCNQuaternion(1, 0, 0, Float.pi) }
+            let axis = SCNVector3.cross(from, to).normalized
+            return SCNQuaternion(axis.x, axis.y, axis.z, acos(dot))
         }
 
         func session(_ session: ARSession, didFailWithError error: Error) {
@@ -123,13 +131,4 @@ private extension SCNVector3 {
     static func dot(_ lhs: SCNVector3, _ rhs: SCNVector3) -> Float { lhs.x * rhs.x + lhs.y * rhs.y + lhs.z * rhs.z }
 }
 
-private extension SCNQuaternion {
-    static func rotationBetween(vector from: SCNVector3, target to: SCNVector3) -> SCNQuaternion {
-        let from = from.normalized
-        let to = to.normalized
-        let dot = max(min(SCNVector3.dot(from, to), 1), -1)
-        if dot < -0.9999 { return SCNQuaternion(1, 0, 0, Float.pi) }
-        let axis = SCNVector3.cross(from, to).normalized
-        return SCNQuaternion(axis.x, axis.y, axis.z, acos(dot))
-    }
-}
+

@@ -31,9 +31,10 @@ jobs:
       - name: Build app without signing
         run: |
           set -euo pipefail
+          mkdir -p "$ARTIFACT_DIR"
           xcodebuild \
             -project "$PROJECT_PATH" \
-            -scheme "$SCHEME" \
+            -target "$SCHEME" \
             -configuration "$CONFIGURATION" \
             -sdk iphoneos \
             -destination 'generic/platform=iOS' \
@@ -42,7 +43,7 @@ jobs:
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
             DEVELOPMENT_TEAM="" \
-            clean build
+            clean build 2>&1 | tee "$ARTIFACT_DIR/xcodebuild.log"
 
       - name: Package unsigned IPA
         run: |
@@ -60,6 +61,15 @@ jobs:
           (cd "$ARTIFACT_DIR" && zip -qry "$IPA_NAME" Payload)
           ls -lh "$ARTIFACT_DIR/$IPA_NAME"
 
+      - name: Upload xcodebuild log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: xcodebuild-log
+          path: ${{ env.ARTIFACT_DIR }}/xcodebuild.log
+          if-no-files-found: ignore
+          retention-days: 14
+
       - name: Upload unsigned IPA
         uses: actions/upload-artifact@v4
         with:
@@ -67,3 +77,4 @@ jobs:
           path: ${{ env.ARTIFACT_DIR }}/${{ env.IPA_NAME }}
           if-no-files-found: error
           retention-days: 14
+
