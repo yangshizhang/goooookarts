@@ -1,5 +1,7 @@
 ﻿# GoKartARLine
 
+详细中文使用教程：Docs/USER_GUIDE_zh-CN.md。
+
 纯 iPhone 卡丁车 AR 动态行车线 App。项目基于 iOS 17+、SwiftUI、ARKit 6、CoreLocation、CoreMotion，零第三方库、零外部硬件依赖。
 
 ## 运行要求
@@ -85,3 +87,4 @@ AR 行车线只作辅助参考，不能替代驾驶员判断。GPS 漂移、IMU 
 构建产物会上传为 Actions artifact：`GoKartARLine-unsigned-ipa`，内部文件为 `GoKartARLine-unsigned.ipa`。
 
 注意：该 IPA 使用 `CODE_SIGNING_ALLOWED=NO` 构建，未签名，不能直接安装到普通 iPhone。它适合做编译验证、代码审查和后续再签名流程。真机安装仍需要 Apple Developer 签名、描述文件或其他合法签名方式。
+
