@@ -71,7 +71,7 @@ struct ARViewContainer: UIViewRepresentable {
             view.session.run(configuration, options: resetTracking ? [.resetTracking, .removeExistingAnchors] : [])
         }
 
-        private static func bestVideoFormat(for resolution: ARVideoResolution) -> ARVideoFormat? {
+        private static func bestVideoFormat(for resolution: ARVideoResolution) -> ARConfiguration.VideoFormat? {
             ARWorldTrackingConfiguration.supportedVideoFormats.min { lhs, rhs in
                 abs(Int(lhs.imageResolution.height) - resolution.targetHeight) < abs(Int(rhs.imageResolution.height) - resolution.targetHeight)
             }
