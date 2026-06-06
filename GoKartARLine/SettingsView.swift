@@ -10,7 +10,7 @@ struct SettingsView: View {
             Form {
                 Section("行车线样式") {
                     Slider(value: $settings.opacity, in: 0.15...1.0) { Text("透明度") }
-                    LabeledContent("透明度", value: settings.opacity, format: .number.precision(.fractionLength(2)))
+                    LabeledContent("透明度") { Text(settings.opacity, format: .number.precision(.fractionLength(2))) }
                     Slider(value: $settings.width, in: 0.2...1.2) { Text("宽度") }
                     LabeledContent("宽度", value: "\(settings.width, specifier: "%.2f") m")
                     Slider(value: $settings.brightness, in: 0.2...1.0) { Text("亮度") }
@@ -35,3 +35,4 @@ struct SettingsView: View {
         }
     }
 }
+
