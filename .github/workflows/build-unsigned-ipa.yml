@@ -15,7 +15,7 @@ jobs:
       PROJECT_PATH: GoKartARLine.xcodeproj
       SCHEME: GoKartARLine
       CONFIGURATION: Release
-      DERIVED_DATA_PATH: build/DerivedData
+      BUILD_PRODUCTS_DIR: build/Products
       ARTIFACT_DIR: build/artifacts
       IPA_NAME: GoKartARLine-unsigned.ipa
 
@@ -38,7 +38,7 @@ jobs:
             -configuration "$CONFIGURATION" \
             -sdk iphoneos \
             -destination 'generic/platform=iOS' \
-            -derivedDataPath "$DERIVED_DATA_PATH" \
+            SYMROOT="$BUILD_PRODUCTS_DIR" \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
@@ -48,10 +48,10 @@ jobs:
       - name: Package unsigned IPA
         run: |
           set -euo pipefail
-          APP_PATH="$DERIVED_DATA_PATH/Build/Products/$CONFIGURATION-iphoneos/$SCHEME.app"
+          APP_PATH="$BUILD_PRODUCTS_DIR/$CONFIGURATION-iphoneos/$SCHEME.app"
           if [ ! -d "$APP_PATH" ]; then
             echo "App bundle not found: $APP_PATH"
-            find "$DERIVED_DATA_PATH/Build/Products" -maxdepth 3 -type d -name "*.app" -print
+            find "$BUILD_PRODUCTS_DIR" -maxdepth 3 -type d -name "*.app" -print
             exit 1
           fi
 
@@ -77,4 +77,5 @@ jobs:
           path: ${{ env.ARTIFACT_DIR }}/${{ env.IPA_NAME }}
           if-no-files-found: error
           retention-days: 14
+
 
