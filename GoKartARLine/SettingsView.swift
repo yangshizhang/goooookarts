@@ -8,15 +8,16 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section("行车线样式") {
+                Section(header: Text("行车线样式")) {
                     Slider(value: $settings.opacity, in: 0.15...1.0) { Text("透明度") }
-                    LabeledContent("透明度") { Text(settings.opacity, format: .number.precision(.fractionLength(2))) }
+                    HStack { Text("透明度"); Spacer(); Text(String(format: "%.2f", settings.opacity)).foregroundStyle(.secondary) }
                     Slider(value: $settings.width, in: 0.2...1.2) { Text("宽度") }
-                    LabeledContent("宽度", value: "\(settings.width, specifier: "%.2f") m")
+                    HStack { Text("宽度"); Spacer(); Text(String(format: "%.2f m", settings.width)).foregroundStyle(.secondary) }
                     Slider(value: $settings.brightness, in: 0.2...1.0) { Text("亮度") }
                     Toggle("禁用深度测试（提升帧率）", isOn: $settings.disableDepthTest)
                 }
-                Section("传感器与性能") {
+
+                Section(header: Text("传感器与性能")) {
                     Picker("GPS精度", selection: $settings.gpsDesiredAccuracy) {
                         Text("导航级").tag(kCLLocationAccuracyBestForNavigation)
                         Text("最佳").tag(kCLLocationAccuracyBest)
@@ -24,8 +25,12 @@ struct SettingsView: View {
                     }
                     Toggle("省电模式（AR 30fps）", isOn: $settings.powerSavingMode)
                 }
-                Section("单位") { Toggle("公制单位", isOn: $settings.metricUnits) }
-                Section("安全") {
+
+                Section(header: Text("单位")) {
+                    Toggle("公制单位", isOn: $settings.metricUnits)
+                }
+
+                Section(header: Text("安全")) {
                     Text("请只在封闭赛道使用。手机必须固定牢靠，AR提示不能替代驾驶判断。")
                         .foregroundStyle(.secondary)
                 }
@@ -35,4 +40,3 @@ struct SettingsView: View {
         }
     }
 }
-
