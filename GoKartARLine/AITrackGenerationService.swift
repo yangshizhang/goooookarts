@@ -33,7 +33,6 @@ enum AITrackGenerationError: LocalizedError {
     case invalidURL
     case invalidResponse
     case noJSON
-    case tooFewPoints
     case server(String)
 
     var errorDescription: String? {
@@ -43,7 +42,6 @@ enum AITrackGenerationError: LocalizedError {
         case .invalidURL: return "AI接口URL无效"
         case .invalidResponse: return "AI接口响应无效"
         case .noJSON: return "AI没有返回合法JSON"
-        case .tooFewPoints: return "AI生成的轨迹点少于200个"
         case .server(let message): return message
         }
     }
@@ -52,14 +50,30 @@ enum AITrackGenerationError: LocalizedError {
 final class AITrackGenerationService {
     static let shared = AITrackGenerationService()
 
-    let baseURL = URL(string: "https://api.tutujin.com/v1")!
+    static let defaultBaseURL = "https://api.tutujin.com/v1"
     static let defaultModel = "claude-3-5-sonnet-20240620"
     private let apiKeyStoreKey = "ai.track.generator.api.key"
     private let modelStoreKey = "ai.track.generator.model"
+    private let baseURLStoreKey = "ai.track.generator.base.url"
     private let session: URLSession
 
     init(session: URLSession = .shared) {
         self.session = session
+    }
+
+    var baseURLString: String {
+        get {
+            let saved = UserDefaults.standard.string(forKey: baseURLStoreKey)?.trimmingCharacters(in: .whitespacesAndNewlines)
+            return saved?.isEmpty == false ? saved! : Self.defaultBaseURL
+        }
+        set {
+            let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            UserDefaults.standard.set(trimmed.isEmpty ? Self.defaultBaseURL : trimmed, forKey: baseURLStoreKey)
+        }
+    }
+
+    var baseURL: URL? {
+        URL(string: baseURLString.trimmingCharacters(in: .whitespacesAndNewlines))
     }
 
     var model: String {
@@ -95,6 +109,7 @@ final class AITrackGenerationService {
             throw AITrackGenerationError.invalidImage
         }
 
+        guard let baseURL else { throw AITrackGenerationError.invalidURL }
         var urlRequest = URLRequest(url: baseURL.appendingPathComponent("chat/completions"))
         urlRequest.httpMethod = "POST"
         urlRequest.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
@@ -125,7 +140,6 @@ final class AITrackGenerationService {
         let jsonText = Self.extractJSONObject(from: content)
         guard let jsonData = jsonText.data(using: .utf8) else { throw AITrackGenerationError.noJSON }
         let aiTrack = try JSONDecoder().decode(AITrackResponse.self, from: jsonData)
-        guard aiTrack.points.count >= 200 else { throw AITrackGenerationError.tooFewPoints }
         return Self.convertToTrackData(aiTrack, origin: request.originCoordinate)
     }
 
@@ -281,5 +295,6 @@ private extension UIImage {
         return renderer.image { _ in draw(in: CGRect(origin: .zero, size: target)) }
     }
 }
+
 
 
