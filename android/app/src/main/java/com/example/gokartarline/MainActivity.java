@@ -48,21 +48,24 @@ public class MainActivity extends Activity {
     private void buildMainUi() {
         FrameLayout root = new FrameLayout(this);
         cameraPreview = new TextureView(this);
+        cameraPreview.setOpaque(false);
         overlay = new DrivingLineOverlay(this);
         overlay.setRenderDistance(renderDistance);
         overlay.setVerticalOffset(lineHeight);
+        root.addView(new LiquidBackdropView(this), new FrameLayout.LayoutParams(-1, -1));
         root.addView(cameraPreview, new FrameLayout.LayoutParams(-1, -1));
         root.addView(overlay, new FrameLayout.LayoutParams(-1, -1));
         status = new TextView(this);
         status.setTextColor(Color.WHITE);
         status.setTextSize(17);
-        status.setPadding(dp(18), dp(12), dp(18), dp(12));
-        status.setBackground(glassPanel(22, 190));
-        status.setElevation(dp(8));
+        status.setPadding(dp(20), dp(12), dp(20), dp(12));
+        status.setShadowLayer(dp(6), 0, dp(1), Color.argb(150, 0, 74, 105));
+        status.setBackground(glassPanel(999, 86));
+        status.setElevation(dp(14));
         FrameLayout.LayoutParams statusParams = new FrameLayout.LayoutParams(-2, -2, Gravity.TOP | Gravity.START);
         statusParams.setMargins(dp(14), dp(14), dp(14), dp(14));
         root.addView(status, statusParams);
-        LinearLayout bar = glassContainer(999, 166);
+        LinearLayout bar = glassContainer(999, 68);
         bar.setGravity(Gravity.CENTER);
         bar.setPadding(dp(10), dp(8), dp(10), dp(8));
         addButton(bar, "Import", v -> importTrack());
@@ -121,7 +124,7 @@ public class MainActivity extends Activity {
                 window.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
                 View decor = window.getDecorView();
                 decor.setPadding(dp(12), dp(12), dp(12), dp(12));
-                decor.setBackground(glassPanel(26, 218));
+                decor.setBackground(glassPanel(32, 102));
                 decor.setElevation(dp(16));
             }
             Button positive = dialog.getButton(AlertDialog.BUTTON_POSITIVE);
@@ -136,7 +139,7 @@ public class MainActivity extends Activity {
     }
 
     private LinearLayout glassDialogBox() {
-        LinearLayout box = glassContainer(22, 130);
+        LinearLayout box = glassContainer(30, 76);
         box.setOrientation(LinearLayout.VERTICAL);
         box.setPadding(dp(24), dp(18), dp(24), dp(12));
         return box;
@@ -247,7 +250,7 @@ public class MainActivity extends Activity {
 
     final class MapDrawerView extends LinearLayout {
         final DrawCanvas canvas; final EditText search;
-        MapDrawerView(Context c) { super(c); setOrientation(VERTICAL); setPadding(dp(12), dp(12), dp(12), dp(12)); setBackgroundColor(Color.rgb(18, 22, 24)); search = new EditText(c); search.setHint("Search place, then draw track"); search.setTextColor(Color.WHITE); search.setHintTextColor(0xAAFFFFFF); search.setBackground(glassPanel(14, 120)); search.setPadding(dp(12), 0, dp(12), 0); Button find = new Button(c); find.setText("Search"); Button close = new Button(c); close.setText("Close Loop"); Button ai = new Button(c); ai.setText("AI Brake Zones"); Button home = new Button(c); home.setText("Back"); LinearLayout top = glassContainer(24, 160); top.setPadding(dp(10), dp(8), dp(10), dp(8)); top.addView(search, new LinearLayout.LayoutParams(0, dp(52), 1)); applyGlassButton(find); applyGlassButton(close); applyGlassButton(ai); applyGlassButton(home); top.addView(find); top.addView(close); top.addView(ai); top.addView(home); addView(top); canvas = new DrawCanvas(c); LinearLayout.LayoutParams canvasLp = new LinearLayout.LayoutParams(-1, 0, 1); canvasLp.setMargins(0, dp(12), 0, 0); addView(canvas, canvasLp); find.setOnClickListener(v -> searchPlace()); close.setOnClickListener(v -> canvas.closeLoop()); ai.setOnClickListener(v -> generateFromDrawing()); home.setOnClickListener(v -> backHome()); }
+        MapDrawerView(Context c) { super(c); setOrientation(VERTICAL); setPadding(dp(12), dp(12), dp(12), dp(12)); setBackgroundColor(Color.rgb(53, 120, 150)); search = new EditText(c); search.setHint("Search place, then draw track"); search.setTextColor(Color.WHITE); search.setHintTextColor(0xAAFFFFFF); search.setBackground(glassPanel(999, 66)); search.setPadding(dp(12), 0, dp(12), 0); Button find = new Button(c); find.setText("Search"); Button close = new Button(c); close.setText("Close Loop"); Button ai = new Button(c); ai.setText("AI Brake Zones"); Button home = new Button(c); home.setText("Back"); LinearLayout top = glassContainer(999, 72); top.setPadding(dp(10), dp(8), dp(10), dp(8)); top.addView(search, new LinearLayout.LayoutParams(0, dp(52), 1)); applyGlassButton(find); applyGlassButton(close); applyGlassButton(ai); applyGlassButton(home); top.addView(find); top.addView(close); top.addView(ai); top.addView(home); addView(top); canvas = new DrawCanvas(c); LinearLayout.LayoutParams canvasLp = new LinearLayout.LayoutParams(-1, 0, 1); canvasLp.setMargins(0, dp(12), 0, 0); addView(canvas, canvasLp); find.setOnClickListener(v -> searchPlace()); close.setOnClickListener(v -> canvas.closeLoop()); ai.setOnClickListener(v -> generateFromDrawing()); home.setOnClickListener(v -> backHome()); }
         void searchPlace() { try { List<Address> list = new Geocoder(MainActivity.this).getFromLocationName(search.getText().toString(), 1); if (list != null && !list.isEmpty()) { canvas.centerLat = list.get(0).getLatitude(); canvas.centerLon = list.get(0).getLongitude(); toast("Located; start drawing"); } } catch (Exception e) { toast("Search failed: " + e.getMessage()); } }
         void generateFromDrawing() { if (!canvas.closed()) { toast("Close loop first"); return; } ArrayList<TrackPoint> pts = canvas.toTrackPoints(); new Thread(() -> { try { TrackData t = callAIForBrakeZones(pts); runOnUiThread(() -> { addTrack(t); backHome(); }); } catch (Exception e) { TrackData t = new TrackData(); t.name = "Map Draw Track"; t.points.addAll(pts); t.length = computeLength(pts); markLocalBrakeZones(t.points); runOnUiThread(() -> { addTrack(t); toast("AI failed; local brake zones generated"); backHome(); }); } }).start(); }
     }
@@ -258,43 +261,199 @@ public class MainActivity extends Activity {
     private void markLocalBrakeZones(List<TrackPoint> pts) { for (int i = 0; i < pts.size(); i++) { TrackPoint p = pts.get(i); if (i % 24 < 5) pts.set(i, new TrackPoint(p.latitude, p.longitude, 35, "red")); else if (i % 24 < 9) pts.set(i, new TrackPoint(p.latitude, p.longitude, 48, "orange")); } }
 
 
+    static final class LiquidBackdropView extends View {
+        private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Paint line = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final RectF rect = new RectF();
+
+        LiquidBackdropView(Context context) {
+            super(context);
+            line.setStyle(Paint.Style.STROKE);
+            line.setStrokeCap(Paint.Cap.ROUND);
+        }
+
+        @Override protected void onDraw(Canvas canvas) {
+            int w = Math.max(getWidth(), 1);
+            int h = Math.max(getHeight(), 1);
+            paint.setShader(new LinearGradient(0, 0, w, h,
+                    new int[]{Color.rgb(221, 245, 255), Color.rgb(29, 181, 227), Color.rgb(0, 96, 221), Color.rgb(232, 246, 250)},
+                    new float[]{0f, 0.34f, 0.72f, 1f}, Shader.TileMode.CLAMP));
+            canvas.drawRect(0, 0, w, h, paint);
+            paint.setShader(new RadialGradient(w * 0.24f, h * 0.22f, w * 0.72f,
+                    new int[]{Color.argb(190, 255, 255, 255), Color.argb(70, 158, 235, 255), Color.TRANSPARENT},
+                    new float[]{0f, 0.45f, 1f}, Shader.TileMode.CLAMP));
+            canvas.drawRect(0, 0, w, h, paint);
+            paint.setShader(new RadialGradient(w * 0.82f, h * 0.82f, w * 0.52f,
+                    new int[]{Color.argb(135, 255, 255, 255), Color.argb(45, 63, 210, 255), Color.TRANSPARENT},
+                    new float[]{0f, 0.48f, 1f}, Shader.TileMode.CLAMP));
+            canvas.drawRect(0, 0, w, h, paint);
+            paint.setShader(null);
+            line.setStrokeWidth(Math.max(18f, w * 0.035f));
+            line.setColor(Color.argb(130, 255, 255, 255));
+            rect.set(-w * 0.16f, h * 0.05f, w * 1.12f, h * 0.76f);
+            canvas.drawArc(rect, 188, 98, false, line);
+            line.setStrokeWidth(Math.max(26f, w * 0.046f));
+            line.setColor(Color.argb(86, 180, 255, 218));
+            rect.set(-w * 0.20f, h * 0.11f, w * 1.06f, h * 0.92f);
+            canvas.drawArc(rect, 202, 105, false, line);
+        }
+    }
+
+
     static final class GlassPanelDrawable extends Drawable {
-        private final Paint fill = new Paint(Paint.ANTI_ALIAS_FLAG);
-        private final Paint stroke = new Paint(Paint.ANTI_ALIAS_FLAG);
-        private final Paint shine = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final float radius;
         private final int alpha;
+        private final Paint fill = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Paint rim = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Paint glow = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final RectF rect = new RectF();
 
         GlassPanelDrawable(float radius, int alpha) {
             this.radius = radius;
-            this.alpha = alpha;
-            stroke.setStyle(Paint.Style.STROKE);
-            stroke.setStrokeWidth(1.6f);
-            stroke.setColor(Color.argb(105, 255, 255, 255));
-            shine.setStyle(Paint.Style.STROKE);
-            shine.setStrokeWidth(2.2f);
-            shine.setColor(Color.argb(95, 255, 255, 255));
+            this.alpha = Math.max(28, Math.min(155, alpha));
         }
 
         @Override public void draw(Canvas canvas) {
             Rect b = getBounds();
-            RectF r = new RectF(b.left + 1, b.top + 1, b.right - 1, b.bottom - 1);
-            fill.setShader(new LinearGradient(0, r.top, 0, r.bottom,
-                    new int[]{Color.argb(Math.min(245, alpha + 38), 255, 255, 255), Color.argb(alpha, 18, 24, 32), Color.argb(Math.max(110, alpha - 45), 4, 8, 14)},
-                    new float[]{0f, 0.42f, 1f}, Shader.TileMode.CLAMP));
-            canvas.drawRoundRect(r, radius, radius, fill);
-            canvas.drawRoundRect(r, radius, radius, stroke);
-            RectF top = new RectF(r.left + radius * 0.45f, r.top + 3, r.right - radius * 0.45f, r.top + Math.max(8, radius * 0.42f));
-            canvas.drawArc(top, 200, 140, false, shine);
+            rect.set(b.left + 1.5f, b.top + 1.5f, b.right - 1.5f, b.bottom - 1.5f);
+            float corner = Math.min(radius, Math.min(rect.width(), rect.height()) / 2f);
+
+            fill.setStyle(Paint.Style.FILL);
+            fill.setShader(new LinearGradient(0, rect.top, 0, rect.bottom,
+                    new int[]{
+                            Color.argb(Math.min(205, alpha + 95), 255, 255, 255),
+                            Color.argb(Math.max(34, alpha - 14), 210, 250, 255),
+                            Color.argb(Math.max(26, alpha - 32), 76, 213, 255),
+                            Color.argb(Math.max(20, alpha - 45), 26, 145, 235)},
+                    new float[]{0f, 0.25f, 0.72f, 1f}, Shader.TileMode.CLAMP));
+            canvas.drawRoundRect(rect, corner, corner, fill);
+            fill.setShader(null);
+
+            glow.setStyle(Paint.Style.FILL);
+            glow.setShader(new RadialGradient(rect.left + rect.width() * 0.24f, rect.top + rect.height() * 0.12f,
+                    Math.max(rect.width(), rect.height()) * 0.72f,
+                    new int[]{Color.argb(150, 255, 255, 255), Color.argb(48, 255, 255, 255), Color.TRANSPARENT},
+                    new float[]{0f, 0.48f, 1f}, Shader.TileMode.CLAMP));
+            canvas.drawRoundRect(rect, corner, corner, glow);
+
+            glow.setShader(new RadialGradient(rect.right - rect.width() * 0.11f, rect.bottom - rect.height() * 0.10f,
+                    Math.max(rect.width(), rect.height()) * 0.38f,
+                    new int[]{Color.argb(115, 98, 223, 255), Color.argb(34, 98, 223, 255), Color.TRANSPARENT},
+                    new float[]{0f, 0.55f, 1f}, Shader.TileMode.CLAMP));
+            canvas.drawRoundRect(rect, corner, corner, glow);
+            glow.setShader(null);
+
+            RectF topShine = new RectF(rect.left + rect.width() * 0.08f, rect.top + rect.height() * 0.06f,
+                    rect.right - rect.width() * 0.08f, rect.top + rect.height() * 0.52f);
+            rim.setStyle(Paint.Style.STROKE);
+            rim.setStrokeCap(Paint.Cap.ROUND);
+            rim.setStrokeWidth(Math.max(2f, rect.height() * 0.035f));
+            rim.setColor(Color.argb(150, 255, 255, 255));
+            canvas.drawArc(topShine, 200, 140, false, rim);
+
+            RectF leftPrism = new RectF(rect.left + rect.width() * 0.03f, rect.top + rect.height() * 0.16f,
+                    rect.left + rect.width() * 0.28f, rect.bottom - rect.height() * 0.12f);
+            rim.setStrokeWidth(Math.max(1.5f, rect.height() * 0.025f));
+            rim.setColor(Color.argb(74, 255, 255, 255));
+            canvas.drawArc(leftPrism, 105, 128, false, rim);
+
+            rim.setStyle(Paint.Style.STROKE);
+            rim.setStrokeWidth(1.8f);
+            rim.setColor(Color.argb(190, 255, 255, 255));
+            canvas.drawRoundRect(rect, corner, corner, rim);
+
+            RectF inner = new RectF(rect.left + 3f, rect.top + 3f, rect.right - 3f, rect.bottom - 3f);
+            rim.setStrokeWidth(1.0f);
+            rim.setColor(Color.argb(72, 128, 232, 255));
+            canvas.drawRoundRect(inner, Math.max(1f, corner - 3f), Math.max(1f, corner - 3f), rim);
         }
 
-        @Override public void setAlpha(int a) { fill.setAlpha(a); }
-        @Override public void setColorFilter(android.graphics.ColorFilter cf) { fill.setColorFilter(cf); }
+        @Override public void setAlpha(int value) { fill.setAlpha(value); rim.setAlpha(value); glow.setAlpha(value); }
+        @Override public void setColorFilter(android.graphics.ColorFilter colorFilter) { fill.setColorFilter(colorFilter); rim.setColorFilter(colorFilter); glow.setColorFilter(colorFilter); }
         @Override public int getOpacity() { return PixelFormat.TRANSLUCENT; }
     }
 
-    static final class TrackData { String name = "Track"; double length; int cornerCount; final ArrayList<TrackPoint> points = new ArrayList<>(); }
-    static final class TrackPoint { final double latitude, longitude, speed; final String color; TrackPoint(double latitude, double longitude, double speed, String color) { this.latitude = latitude; this.longitude = longitude; this.speed = speed; this.color = color; } }
+    static final class TrackData {
+        String name = "Track";
+        double length;
+        int cornerCount;
+        final ArrayList<TrackPoint> points = new ArrayList<>();
+    }
 
-    final class DrivingLineOverlay extends View { final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG); List<TrackPoint> track = new ArrayList<>(); double renderDistance = 160; float verticalOffset = 0; DrivingLineOverlay(Context c) { super(c); paint.setStyle(Paint.Style.STROKE); paint.setStrokeCap(Paint.Cap.ROUND); paint.setStrokeJoin(Paint.Join.ROUND); paint.setStrokeWidth(18); } void setTrack(List<TrackPoint> t) { track = t; invalidate(); } double getRenderDistance() { return renderDistance; } void setRenderDistance(double d) { renderDistance = d; invalidate(); } float getVerticalOffset() { return verticalOffset; } void setVerticalOffset(float v) { verticalOffset = v; invalidate(); } protected void onDraw(Canvas canvas) { super.onDraw(canvas); if (track.size() < 2) return; List<PointF> pts = projectTrack(); for (int i = 0; i < pts.size() - 1; i++) { float alpha = i < pts.size() * 0.45f ? 0.82f : Math.max(0.1f, 1f - (i / (float) pts.size())); paint.setColor(colorFor(track.get(i % track.size()).color, alpha)); canvas.drawLine(pts.get(i).x, pts.get(i).y + verticalOffset, pts.get(i + 1).x, pts.get(i + 1).y + verticalOffset, paint); } } List<PointF> projectTrack() { TrackPoint o = track.get(0); double latS = 111320.0, lonS = Math.max(Math.cos(Math.toRadians(o.latitude)) * 111320.0, 1.0), mpp = Math.max(renderDistance / Math.max(getHeight() * 0.72, 1), 0.1); float cx = getWidth() / 2f, sy = getHeight() * 0.86f; ArrayList<PointF> r = new ArrayList<>(); double d = 0; for (int i = 0; i < track.size() && d <= renderDistance; i++) { TrackPoint p = track.get(i); if (i > 0) d += distanceMeters(track.get(i - 1), p); float x = cx + (float) (((p.longitude - o.longitude) * lonS) / mpp); float y = sy - (float) (Math.abs((p.latitude - o.latitude) * latS) / mpp); r.add(new PointF(x, y)); } if (r.size() < 2) { r.add(new PointF(cx, sy)); r.add(new PointF(cx, sy - getHeight() * 0.55f)); } return r; } int colorFor(String color, float alpha) { int a = Math.min(255, Math.max(0, (int) (alpha * 255))); if ("red".equals(color)) return Color.argb(a, 255, 0, 0); if ("orange".equals(color)) return Color.argb(a, 255, 210, 0); return Color.argb(a, 0, 255, 70); } }
+    static final class TrackPoint {
+        final double latitude;
+        final double longitude;
+        final double speed;
+        final String color;
+
+        TrackPoint(double latitude, double longitude, double speed, String color) {
+            this.latitude = latitude;
+            this.longitude = longitude;
+            this.speed = speed;
+            this.color = color;
+        }
+    }
+
+    final class DrivingLineOverlay extends View {
+        final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        List<TrackPoint> track = new ArrayList<>();
+        double renderDistance = 160;
+        float verticalOffset = 0;
+
+        DrivingLineOverlay(Context c) {
+            super(c);
+            paint.setStyle(Paint.Style.STROKE);
+            paint.setStrokeCap(Paint.Cap.ROUND);
+            paint.setStrokeJoin(Paint.Join.ROUND);
+            paint.setStrokeWidth(18);
+        }
+
+        void setTrack(List<TrackPoint> t) { track = t; invalidate(); }
+        double getRenderDistance() { return renderDistance; }
+        void setRenderDistance(double d) { renderDistance = d; invalidate(); }
+        float getVerticalOffset() { return verticalOffset; }
+        void setVerticalOffset(float v) { verticalOffset = v; invalidate(); }
+
+        @Override protected void onDraw(Canvas canvas) {
+            super.onDraw(canvas);
+            if (track.size() < 2) return;
+            List<PointF> pts = projectTrack();
+            for (int i = 0; i < pts.size() - 1; i++) {
+                float alpha = i < pts.size() * 0.45f ? 0.82f : Math.max(0.1f, 1f - (i / (float) pts.size()));
+                paint.setColor(colorFor(track.get(i % track.size()).color, alpha));
+                canvas.drawLine(pts.get(i).x, pts.get(i).y + verticalOffset, pts.get(i + 1).x, pts.get(i + 1).y + verticalOffset, paint);
+            }
+        }
+
+        List<PointF> projectTrack() {
+            TrackPoint origin = track.get(0);
+            double latScale = 111320.0;
+            double lonScale = Math.max(Math.cos(Math.toRadians(origin.latitude)) * 111320.0, 1.0);
+            double metersPerPixel = Math.max(renderDistance / Math.max(getHeight() * 0.72, 1), 0.1);
+            float centerX = getWidth() / 2f;
+            float startY = getHeight() * 0.86f;
+            ArrayList<PointF> result = new ArrayList<>();
+            double distance = 0;
+            for (int i = 0; i < track.size() && distance <= renderDistance; i++) {
+                TrackPoint point = track.get(i);
+                if (i > 0) distance += distanceMeters(track.get(i - 1), point);
+                float x = centerX + (float) (((point.longitude - origin.longitude) * lonScale) / metersPerPixel);
+                float y = startY - (float) (Math.abs((point.latitude - origin.latitude) * latScale) / metersPerPixel);
+                result.add(new PointF(x, y));
+            }
+            if (result.size() < 2) {
+                result.add(new PointF(centerX, startY));
+                result.add(new PointF(centerX, startY - getHeight() * 0.55f));
+            }
+            return result;
+        }
+
+        int colorFor(String color, float alpha) {
+            int channel = Math.min(255, Math.max(0, (int) (alpha * 255)));
+            if ("red".equals(color)) return Color.argb(channel, 255, 0, 0);
+            if ("orange".equals(color)) return Color.argb(channel, 255, 210, 0);
+            return Color.argb(channel, 0, 255, 70);
+        }
+    }
+
 }
