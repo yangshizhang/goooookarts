@@ -77,10 +77,9 @@ struct ARViewContainer: UIViewRepresentable {
             }
 
             let currentCoordinate = fusedPose?.coordinate ?? originCoordinate
-            let vehiclePosition = GeoConverter.arPosition(for: currentCoordinate, origin: originCoordinate)
-            let course = Float((fusedPose?.course ?? 0) * .pi / 180.0)
-            let forward = SCNVector3(sin(course), 0, -cos(course)).normalized
-            let sourcePoints = resampledVisiblePoints(from: track, origin: originCoordinate, vehiclePosition: vehiclePosition, forward: forward)
+            let vehicleWorldPosition = GeoConverter.arPosition(for: currentCoordinate, origin: originCoordinate)
+            let vehicleLinePosition = vehicleWorldPosition.rotatedAroundY(degrees: mapHeadingOffsetDegrees)
+            let sourcePoints = resampledVisiblePoints(from: track, origin: originCoordinate, vehiclePosition: vehicleLinePosition)
 
             guard sourcePoints.count > 1 else {
                 lineNode.geometry = nil
@@ -90,31 +89,63 @@ struct ARViewContainer: UIViewRepresentable {
             lineNode.geometry = makeTriangleStripGeometry(points: sourcePoints, view: view)
         }
 
-        private func resampledVisiblePoints(from track: TrackData, origin: CLLocationCoordinate2D, vehiclePosition: SCNVector3, forward: SCNVector3) -> [VisibleLinePoint] {
-            let positions = track.points.map { point in
+        private func resampledVisiblePoints(from track: TrackData, origin: CLLocationCoordinate2D, vehiclePosition: SCNVector3) -> [VisibleLinePoint] {
+            let points = track.points.map { point in
                 VisibleLinePoint(position: GeoConverter.arPosition(for: point.coordinate, origin: origin), color: point.color, distanceAhead: 0)
             }
-            var visible: [VisibleLinePoint] = []
+            guard points.count > 1, let nearest = nearestTrackProjection(in: points, to: vehiclePosition) else { return [] }
 
-            for (start, end) in zip(positions, positions.dropFirst()) {
-                let segment = end.position - start.position
+            var visible: [VisibleLinePoint] = []
+            let segmentCount = points.count - 1
+            var segmentIndex = nearest.segmentIndex
+            var startPosition = nearest.position
+            var startColor = nearest.color
+            var distanceAhead: Float = 0
+
+            while distanceAhead <= maximumVisibleDistance {
+                let nextIndex = (segmentIndex + 1) % points.count
+                let endPoint = points[nextIndex]
+                let segment = endPoint.position - startPosition
                 let length = segment.length
-                guard length > 0 else { continue }
-                let steps = max(Int(ceil(length / 0.5)), 1)
-                for step in 0...steps {
-                    let progress = Float(step) / Float(steps)
-                    let position = start.position + segment * progress
-                    let relative = position - vehiclePosition
-                    let distanceAhead = SCNVector3.dot(relative, forward)
-                    guard distanceAhead >= 0, distanceAhead <= maximumVisibleDistance else { continue }
-                    let lateral = (relative - forward * distanceAhead).length
-                    guard lateral <= 8 else { continue }
-                    let color = VisibleLinePoint.interpolatedColor(from: start.color, to: end.color, progress: progress)
-                    visible.append(VisibleLinePoint(position: position, color: color, distanceAhead: distanceAhead))
+                if length > 0 {
+                    let steps = max(Int(ceil(length / 0.5)), 1)
+                    for step in 0...steps {
+                        let progress = Float(step) / Float(steps)
+                        let sampleDistance = distanceAhead + length * progress
+                        guard sampleDistance <= maximumVisibleDistance else { break }
+                        let position = startPosition + segment * progress
+                        let color = VisibleLinePoint.interpolatedColor(from: startColor, to: endPoint.color, progress: progress)
+                        visible.append(VisibleLinePoint(position: position, color: color, distanceAhead: sampleDistance))
+                    }
+                    distanceAhead += length
                 }
+
+                segmentIndex = nextIndex
+                if segmentIndex >= segmentCount { segmentIndex = 0 }
+                startPosition = points[segmentIndex].position
+                startColor = points[segmentIndex].color
+                if segmentIndex == nearest.segmentIndex { break }
             }
 
             return visible
+        }
+
+        private func nearestTrackProjection(in points: [VisibleLinePoint], to vehiclePosition: SCNVector3) -> TrackProjection? {
+            var best: TrackProjection?
+            for index in 0..<(points.count - 1) {
+                let start = points[index]
+                let end = points[index + 1]
+                let segment = end.position - start.position
+                let lengthSquared = max(segment.x * segment.x + segment.z * segment.z, 0.0001)
+                let relative = vehiclePosition - start.position
+                let progress = min(max((relative.x * segment.x + relative.z * segment.z) / lengthSquared, 0), 1)
+                let position = start.position + segment * progress
+                let distance = (vehiclePosition - position).horizontalLength
+                let color = VisibleLinePoint.interpolatedColor(from: start.color, to: end.color, progress: progress)
+                let projection = TrackProjection(segmentIndex: index, position: position, color: color, distance: distance)
+                if best == nil || projection.distance < best!.distance { best = projection }
+            }
+            return best
         }
 
         private func makeTriangleStripGeometry(points: [VisibleLinePoint], view: ARSCNView) -> SCNGeometry {
@@ -200,6 +231,13 @@ extension Notification.Name {
     static let arSessionError = Notification.Name("arSessionError")
 }
 
+private struct TrackProjection {
+    var segmentIndex: Int
+    var position: SCNVector3
+    var color: SIMD3<Float>
+    var distance: Float
+}
+
 private struct VisibleLinePoint {
     var position: SCNVector3
     var color: SIMD3<Float>
@@ -233,6 +271,7 @@ private extension TrackPointColor {
 
 private extension SCNVector3 {
     var length: Float { sqrt(x * x + y * y + z * z) }
+    var horizontalLength: Float { sqrt(x * x + z * z) }
 
     var normalized: SCNVector3 {
         let length = length
@@ -250,6 +289,13 @@ private extension SCNVector3 {
 
     static func *(lhs: SCNVector3, rhs: Float) -> SCNVector3 {
         SCNVector3(lhs.x * rhs, lhs.y * rhs, lhs.z * rhs)
+    }
+
+    func rotatedAroundY(degrees: Double) -> SCNVector3 {
+        let radians = Float(degrees * .pi / 180.0)
+        let cosine = cos(radians)
+        let sine = sin(radians)
+        return SCNVector3(x * cosine + z * sine, y, -x * sine + z * cosine)
     }
 
     static func dot(_ lhs: SCNVector3, _ rhs: SCNVector3) -> Float { lhs.x * rhs.x + lhs.y * rhs.y + lhs.z * rhs.z }
