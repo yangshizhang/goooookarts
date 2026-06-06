@@ -49,6 +49,7 @@ public class MainActivity extends Activity {
         FrameLayout root = new FrameLayout(this);
         cameraPreview = new TextureView(this);
         cameraPreview.setOpaque(false);
+        cameraPreview.setAlpha(0.86f);
         overlay = new DrivingLineOverlay(this);
         overlay.setRenderDistance(renderDistance);
         overlay.setVerticalOffset(lineHeight);
@@ -60,12 +61,12 @@ public class MainActivity extends Activity {
         status.setTextSize(17);
         status.setPadding(dp(20), dp(12), dp(20), dp(12));
         status.setShadowLayer(dp(6), 0, dp(1), Color.argb(150, 0, 74, 105));
-        status.setBackground(glassPanel(999, 40));
+        status.setBackground(glassPanel(999, 18));
         status.setElevation(dp(14));
         FrameLayout.LayoutParams statusParams = new FrameLayout.LayoutParams(-2, -2, Gravity.TOP | Gravity.START);
         statusParams.setMargins(dp(14), dp(14), dp(14), dp(14));
         root.addView(status, statusParams);
-        LinearLayout bar = glassContainer(999, 26);
+        LinearLayout bar = glassContainer(999, 12);
         bar.setGravity(Gravity.CENTER);
         bar.setPadding(dp(10), dp(8), dp(10), dp(8));
         addButton(bar, "Import", v -> importTrack());
@@ -111,8 +112,8 @@ public class MainActivity extends Activity {
         button.setMinWidth(dp(108));
         button.setPadding(dp(18), 0, dp(18), 0);
         StateListDrawable states = new StateListDrawable();
-        states.addState(new int[]{android.R.attr.state_pressed}, glassPanel(999, 72));
-        states.addState(new int[]{}, glassPanel(999, 34));
+        states.addState(new int[]{android.R.attr.state_pressed}, glassPanel(999, 42));
+        states.addState(new int[]{}, glassPanel(999, 14));
         button.setBackground(states);
         button.setElevation(dp(6));
     }
@@ -124,7 +125,7 @@ public class MainActivity extends Activity {
                 window.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
                 View decor = window.getDecorView();
                 decor.setPadding(dp(12), dp(12), dp(12), dp(12));
-                decor.setBackground(glassPanel(36, 48));
+                decor.setBackground(glassPanel(36, 24));
                 decor.setElevation(dp(16));
             }
             Button positive = dialog.getButton(AlertDialog.BUTTON_POSITIVE);
@@ -139,7 +140,7 @@ public class MainActivity extends Activity {
     }
 
     private LinearLayout glassDialogBox() {
-        LinearLayout box = glassContainer(32, 30);
+        LinearLayout box = glassContainer(32, 14);
         box.setOrientation(LinearLayout.VERTICAL);
         box.setPadding(dp(24), dp(18), dp(24), dp(12));
         return box;
@@ -310,16 +311,16 @@ public class MainActivity extends Activity {
 
         GlassPanelDrawable(float radius, int alpha) {
             this.radius = radius;
-            this.alpha = Math.max(12, Math.min(96, alpha));
+            this.alpha = Math.max(2, Math.min(64, alpha));
         }
 
         @Override public void draw(Canvas canvas) {
             Rect b = getBounds();
             rect.set(b.left + 1.5f, b.top + 1.5f, b.right - 1.5f, b.bottom - 1.5f);
             float corner = Math.min(radius, Math.min(rect.width(), rect.height()) / 2f);
-            int topAlpha = Math.min(120, alpha + 34);
+            int topAlpha = Math.min(68, alpha + 18);
             int midAlpha = alpha;
-            int bottomAlpha = Math.max(6, alpha / 3);
+            int bottomAlpha = Math.max(0, alpha / 5);
 
             fill.setStyle(Paint.Style.FILL);
             fill.setShader(new LinearGradient(0, rect.top, 0, rect.bottom,
@@ -334,13 +335,13 @@ public class MainActivity extends Activity {
             glow.setStyle(Paint.Style.FILL);
             glow.setShader(new RadialGradient(rect.left + rect.width() * 0.20f, rect.top + rect.height() * 0.08f,
                     Math.max(rect.width(), rect.height()) * 0.74f,
-                    new int[]{Color.argb(Math.min(80, alpha + 28), 255, 255, 255), Color.argb(12, 255, 255, 255), Color.TRANSPARENT},
+                    new int[]{Color.argb(Math.min(42, alpha + 14), 255, 255, 255), Color.argb(7, 255, 255, 255), Color.TRANSPARENT},
                     new float[]{0f, 0.52f, 1f}, Shader.TileMode.CLAMP));
             canvas.drawRoundRect(rect, corner, corner, glow);
 
             glow.setShader(new RadialGradient(rect.right - rect.width() * 0.10f, rect.bottom - rect.height() * 0.08f,
                     Math.max(rect.width(), rect.height()) * 0.42f,
-                    new int[]{Color.argb(34, 145, 224, 255), Color.argb(10, 145, 224, 255), Color.TRANSPARENT},
+                    new int[]{Color.argb(28, 94, 215, 255), Color.argb(7, 94, 215, 255), Color.TRANSPARENT},
                     new float[]{0f, 0.52f, 1f}, Shader.TileMode.CLAMP));
             canvas.drawRoundRect(rect, corner, corner, glow);
             glow.setShader(null);
@@ -350,23 +351,23 @@ public class MainActivity extends Activity {
             rim.setStyle(Paint.Style.STROKE);
             rim.setStrokeCap(Paint.Cap.ROUND);
             rim.setStrokeWidth(Math.max(1.6f, rect.height() * 0.030f));
-            rim.setColor(Color.argb(205, 255, 255, 255));
+            rim.setColor(Color.argb(220, 255, 255, 255));
             canvas.drawArc(topShine, 200, 140, false, rim);
 
             RectF leftCaustic = new RectF(rect.left + rect.width() * 0.04f, rect.top + rect.height() * 0.16f,
                     rect.left + rect.width() * 0.30f, rect.bottom - rect.height() * 0.12f);
             rim.setStrokeWidth(Math.max(1.2f, rect.height() * 0.020f));
-            rim.setColor(Color.argb(90, 255, 255, 255));
+            rim.setColor(Color.argb(120, 255, 255, 255));
             canvas.drawArc(leftCaustic, 105, 128, false, rim);
 
             rim.setStyle(Paint.Style.STROKE);
             rim.setStrokeWidth(1.8f);
-            rim.setColor(Color.argb(176, 255, 255, 255));
+            rim.setColor(Color.argb(210, 255, 255, 255));
             canvas.drawRoundRect(rect, corner, corner, rim);
 
             RectF inner = new RectF(rect.left + 3f, rect.top + 3f, rect.right - 3f, rect.bottom - 3f);
             rim.setStrokeWidth(1.0f);
-            rim.setColor(Color.argb(44, 112, 220, 255));
+            rim.setColor(Color.argb(70, 112, 220, 255));
             canvas.drawRoundRect(inner, Math.max(1f, corner - 3f), Math.max(1f, corner - 3f), rim);
         }
 
