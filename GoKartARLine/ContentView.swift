@@ -5,10 +5,12 @@ import ReplayKit
 struct ContentView: View {
     @EnvironmentObject private var trackDataManager: TrackDataManager
     @EnvironmentObject private var locationManager: LocationManager
+    @EnvironmentObject private var onlineSyncManager: OnlineSyncManager
     @State private var settings = ARLineSettings()
     @State private var isImporting = false
     @State private var showingSettings = false
     @State private var showingTrackList = false
+    @State private var showingOnline = false
     @State private var arErrorMessage: String?
     @State private var isRecording = false
 
@@ -27,13 +29,21 @@ struct ContentView: View {
         .preferredColorScheme(.dark)
         .onAppear { locationManager.requestPermissionsAndStart(desiredAccuracy: settings.gpsDesiredAccuracy) }
         .onDisappear { locationManager.stopSensors() }
-        .onReceive(locationManager.$fusedPose) { _ in locationManager.autoCalibrateIfNeeded(track: trackDataManager.selectedTrack) }
+        .onReceive(locationManager.$fusedPose) { pose in
+            locationManager.autoCalibrateIfNeeded(track: trackDataManager.selectedTrack)
+            if let pose { onlineSyncManager.observe(pose: pose, track: trackDataManager.selectedTrack) }
+        }
         .onReceive(NotificationCenter.default.publisher(for: .arSessionError)) { arErrorMessage = $0.object as? String }
         .fileImporter(isPresented: $isImporting, allowedContentTypes: [.json, .xml], allowsMultipleSelection: false) { result in
             if case let .success(urls) = result, let url = urls.first { trackDataManager.importFile(from: url) }
         }
         .sheet(isPresented: $showingSettings) { SettingsView(settings: $settings) }
         .sheet(isPresented: $showingTrackList) { TrackListView() }
+        .sheet(isPresented: $showingOnline) {
+            OnlineCenterView()
+                .environmentObject(onlineSyncManager)
+                .environmentObject(trackDataManager)
+        }
         .alert("提示", isPresented: Binding(get: { trackDataManager.errorMessage != nil || arErrorMessage != nil }, set: { _ in trackDataManager.errorMessage = nil; arErrorMessage = nil })) {
             Button("知道了", role: .cancel) {}
         } message: { Text(trackDataManager.errorMessage ?? arErrorMessage ?? "") }
@@ -57,6 +67,7 @@ struct ContentView: View {
         HStack(spacing: 10) {
             Button("导入") { isImporting = true }
             Button("赛道") { showingTrackList = true }
+            Button("在线") { showingOnline = true }
             Button("校准") { locationManager.manualCalibrate(using: trackDataManager.selectedTrack) }
             Button(isRecording ? "停止" : "录屏") { toggleRecording() }
             Button("截图") { NotificationCenter.default.post(name: .captureARStillImage, object: nil) }
@@ -76,7 +87,7 @@ struct ContentView: View {
     }
 
     private var isMainInterfaceActive: Bool {
-        !isImporting && !showingSettings && !showingTrackList
+        !isImporting && !showingSettings && !showingTrackList && !showingOnline
     }
 
 

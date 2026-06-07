@@ -36,13 +36,14 @@ struct TrackPoint: Codable, Identifiable, Hashable {
 
 struct TrackData: Codable, Identifiable, Hashable {
     var id = UUID()
+    var remoteID: String?
     var trackName: String
     var trackLength: Double
     var cornerCount: Int
     var points: [TrackPoint]
     var importedAt = Date()
 
-    enum CodingKeys: String, CodingKey { case trackName, trackLength, cornerCount, points }
+    enum CodingKeys: String, CodingKey { case remoteID, trackName, trackLength, cornerCount, points }
     var startCoordinate: CLLocationCoordinate2D? { points.first?.coordinate }
 }
 

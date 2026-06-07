@@ -2,12 +2,12 @@
 
 详细中文使用教程：Docs/USER_GUIDE_zh-CN.md。
 
-纯 iPhone 卡丁车 AR 动态行车线 App。项目基于 iOS 17+、SwiftUI、ARKit 6、CoreLocation、CoreMotion，零第三方库、零外部硬件依赖。
+纯 iPhone / Android 卡丁车 AR 动态行车线 App。iOS 最低版本为 iOS 16.0，使用 SwiftUI、ARKit、CoreLocation、CoreMotion；Android 使用原生 Java 单 Activity 实现。
 
 ## 运行要求
 
 - Xcode 15.4 或更新版本
-- iOS 17.0 或更新版本
+- iOS 16.0 或更新版本
 - 真机 iPhone；模拟器无法完整验证 ARKit、相机、GPS 和 IMU
 - 在 Xcode 中设置自己的 Signing Team，并按需修改 Bundle Identifier
 
@@ -22,6 +22,8 @@
 - `GoKartARLine/TrackPoint.swift`：数据模型、颜色提示、WGS84 到 UTM 转换
 - `GoKartARLine/SettingsView.swift`：样式、传感器、省电、单位设置
 - `GoKartARLine/TrackMapCalibrationView.swift`：选择赛道时的地图位置与方向校准
+- `GoKartARLine/OnlineSyncManager.swift`：注册登录、在线地图分享、下载、排行榜、圈速上传
+- `server/`：16781 端口在线服务端，HTTP API/admin 与 UDP 遥测同端口
 - `SampleTrack.json`：包含 120 个轨迹点的示例赛道数据
 
 ## 如何运行
@@ -59,6 +61,18 @@ JSON 格式：
 - `color` 只能是 `green`、`orange`、`red`
 - 经纬度必须是 WGS84
 - GPX 导入会转换为内部 JSON 数据；默认速度为 50，颜色为绿色
+
+## 在线功能
+
+底部点击 `在线` 可使用：
+
+- 注册/登录：用户名、密码、邮箱、验证码。
+- 地图分享：上传当前赛道，服务端识别闭合度、长度、范围、弯道特征；符合真卡丁车场特征才进入分享页。
+- 地图下载：从分享页下载其他用户地图并导入本地使用。
+- 排行榜：下载的共享赛道每圈自动记录圈速、GPS 精度和采样数据，服务端展示前十。
+- 自动优化：跑完一圈后上传 GPS 采样，服务端按多圈数据微调赛道轨迹，提高共享赛道精度。
+
+服务端默认地址：`http://cheap-host1.cheapyun.com:16781`。后端配置页同端口：`/admin`。
 
 ## 校准位置
 

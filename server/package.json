@@ -1,0 +1,13 @@
+{
+  "name": "gokart-online-server",
+  "version": "1.0.0",
+  "private": true,
+  "description": "GoKartARLine online sharing and leaderboard server",
+  "main": "gokart-online-server.js",
+  "scripts": {
+    "start": "node gokart-online-server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

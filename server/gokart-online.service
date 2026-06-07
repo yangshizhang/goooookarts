@@ -1,0 +1,16 @@
+[Unit]
+Description=GoKartARLine Online Server
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/gokart-online
+Environment=PORT=16781
+Environment=HOST=0.0.0.0
+Environment=DATA_DIR=/opt/gokart-online/data
+ExecStart=/usr/bin/node /opt/gokart-online/gokart-online-server.js
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

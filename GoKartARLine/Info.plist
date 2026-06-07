@@ -16,6 +16,17 @@
     <key>NSLocationAlwaysAndWhenInUseUsageDescription</key><string>仅在驾驶和校准时使用定位来提升行车线对齐精度。</string>
     <key>NSMotionUsageDescription</key><string>需要读取IMU传感器以融合GPS并降低定位延迟。</string>
     <key>NSPhotoLibraryAddUsageDescription</key><string>需要保存带AR行车线的截图到相册。</string>
+    <key>NSAppTransportSecurity</key>
+    <dict>
+        <key>NSExceptionDomains</key>
+        <dict>
+            <key>cheap-host1.cheapyun.com</key>
+            <dict>
+                <key>NSExceptionAllowsInsecureHTTPLoads</key><true/>
+                <key>NSIncludesSubdomains</key><true/>
+            </dict>
+        </dict>
+    </dict>
     <key>UISupportedInterfaceOrientations</key>
     <array>
         <string>UIInterfaceOrientationLandscapeLeft</string>

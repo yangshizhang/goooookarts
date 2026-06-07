@@ -4,6 +4,7 @@
 struct GoKartARLineApp: App {
     @StateObject private var trackDataManager = TrackDataManager()
     @StateObject private var locationManager = LocationManager()
+    @StateObject private var onlineSyncManager = OnlineSyncManager()
     @AppStorage("hasAcceptedSafetyWarning") private var hasAcceptedSafetyWarning = false
 
     var body: some Scene {
@@ -11,6 +12,7 @@ struct GoKartARLineApp: App {
             ContentView()
                 .environmentObject(trackDataManager)
                 .environmentObject(locationManager)
+                .environmentObject(onlineSyncManager)
                 .alert("安全提示", isPresented: .constant(!hasAcceptedSafetyWarning)) {
                     Button("我已理解，继续使用") { hasAcceptedSafetyWarning = true }
                 } message: {

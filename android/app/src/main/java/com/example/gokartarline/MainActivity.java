@@ -28,6 +28,7 @@ import java.util.regex.*;
 
 public class MainActivity extends Activity {
     private static final int REQ_PERM = 7, REQ_IMPORT = 8, REQ_IMAGE = 9, REQ_RECORD = 10;
+    private static final String DEFAULT_ONLINE_BASE_URL = "http://cheap-host1.cheapyun.com:16781";
     private FrameLayout rootView;
     private TextureView cameraPreview;
     private DrivingLineOverlay overlay;
@@ -63,6 +64,15 @@ public class MainActivity extends Activity {
     private ImagePointView aiImageView;
     private TextView aiMessage;
     private AlertDialog activeDialog;
+    private String onlineBaseUrl;
+    private String onlineToken;
+    private String onlineUsername;
+    private String onlineEmail;
+    private String lapTrackRemoteId;
+    private long lapStartedAt = 0;
+    private long lastLapSampleAt = 0;
+    private boolean wasNearStart = false;
+    private final ArrayList<TrackPoint> lapSamples = new ArrayList<>();
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
@@ -77,6 +87,10 @@ public class MainActivity extends Activity {
         disableDepthTest = prefs.getBoolean("disableDepthTest", true);
         metricUnits = prefs.getBoolean("metricUnits", true);
         gpsAccuracyIndex = prefs.getInt("gpsAccuracy", 0);
+        onlineBaseUrl = prefs.getString("onlineBaseUrl", DEFAULT_ONLINE_BASE_URL);
+        onlineToken = prefs.getString("onlineToken", "");
+        onlineUsername = prefs.getString("onlineUsername", "");
+        onlineEmail = prefs.getString("onlineEmail", "");
         projectionManager = (MediaProjectionManager) getSystemService(MEDIA_PROJECTION_SERVICE);
         loadTracks();
         buildMainUi();
@@ -126,6 +140,7 @@ public class MainActivity extends Activity {
         bar.setPadding(0, 0, 0, 0);
         addButton(bar, "导入", v -> importTrack());
         addButton(bar, "赛道", v -> showTrackList());
+        addButton(bar, "在线", v -> showOnlineCenter());
         addButton(bar, "校准", v -> manualCalibrate());
         recordButton = addButton(bar, isRecording ? "停止" : "录屏", v -> toggleRecording());
         addButton(bar, "截图", v -> captureStillImage());
@@ -354,6 +369,7 @@ public class MainActivity extends Activity {
     private TrackData parseTrack(String json, String fallbackName) throws Exception {
         JSONObject obj = new JSONObject(json);
         TrackData t = new TrackData();
+        t.remoteId = obj.optString("remoteID", obj.optString("remoteId", ""));
         t.name = obj.optString("trackName", fallbackName);
         t.length = obj.optDouble("trackLength", 0);
         t.cornerCount = obj.optInt("cornerCount", 0);
@@ -374,7 +390,7 @@ public class MainActivity extends Activity {
         if (locationService == null) locationService = (android.location.LocationManager) getSystemService(LOCATION_SERVICE);
         if (locationListener == null) {
             locationListener = new LocationListener() {
-                @Override public void onLocationChanged(Location location) { latestLocation = location; updateHud(); }
+                @Override public void onLocationChanged(Location location) { latestLocation = location; updateHud(); handleLapTelemetry(location); }
                 @Override public void onStatusChanged(String provider, int status, Bundle extras) {}
                 @Override public void onProviderEnabled(String provider) {}
                 @Override public void onProviderDisabled(String provider) {}
@@ -475,6 +491,302 @@ public class MainActivity extends Activity {
             MediaScannerConnection.scanFile(this, new String[]{recordingFile.getAbsolutePath()}, new String[]{"video/mp4"}, null);
             toast("录屏已保存：" + recordingFile.getName());
         }
+    }
+
+    private void showOnlineCenter() {
+        LinearLayout box = glassDialogBox();
+        box.addView(sectionLabel("服务器"));
+        EditText base = aiField("Base URL", onlineBaseUrl, false);
+        box.addView(base);
+        LinearLayout serverTools = new LinearLayout(this);
+        addButton(serverTools, "保存地址", v -> {
+            onlineBaseUrl = normalizeOnlineBase(base.getText().toString());
+            prefs.edit().putString("onlineBaseUrl", onlineBaseUrl).apply();
+            toast("服务器地址已保存");
+        });
+        box.addView(serverTools, new LinearLayout.LayoutParams(-1, dp(62)));
+
+        if (isOnlineLoggedIn()) {
+            box.addView(sectionLabel("账号"));
+            box.addView(label((onlineUsername == null || onlineUsername.isEmpty() ? "已登录" : onlineUsername) + (onlineEmail == null || onlineEmail.isEmpty() ? "" : " · " + onlineEmail)));
+            LinearLayout actions = new LinearLayout(this);
+            addButton(actions, "上传当前赛道", v -> uploadSelectedTrack());
+            addButton(actions, "分享页", v -> fetchOnlineTracks());
+            addButton(actions, "退出", v -> {
+                onlineToken = "";
+                onlineUsername = "";
+                onlineEmail = "";
+                prefs.edit().remove("onlineToken").remove("onlineUsername").remove("onlineEmail").apply();
+                toast("已退出登录");
+            });
+            box.addView(actions, new LinearLayout.LayoutParams(-1, dp(62)));
+            TextView info = label("下载的共享赛道跑完一圈后，会自动上传圈速、GPS采样并优化服务器赛道。");
+            info.setTextColor(Color.argb(180, 255, 255, 255));
+            box.addView(info);
+        } else {
+            box.addView(sectionLabel("登录"));
+            EditText login = aiField("用户名或邮箱", "", false);
+            EditText loginPassword = aiField("密码", "", true);
+            box.addView(login);
+            box.addView(loginPassword);
+            LinearLayout loginTools = new LinearLayout(this);
+            addButton(loginTools, "登录", v -> loginOnline(login.getText().toString(), loginPassword.getText().toString()));
+            box.addView(loginTools, new LinearLayout.LayoutParams(-1, dp(62)));
+
+            box.addView(sectionLabel("注册"));
+            EditText username = aiField("用户名", "", false);
+            EditText email = aiField("邮箱", "", false);
+            EditText password = aiField("密码", "", true);
+            EditText code = aiField("验证码", "", false);
+            box.addView(username);
+            box.addView(email);
+            box.addView(password);
+            box.addView(code);
+            LinearLayout registerTools = new LinearLayout(this);
+            addButton(registerTools, "获取验证码", v -> requestOnlineCode(email.getText().toString()));
+            addButton(registerTools, "注册", v -> registerOnline(username.getText().toString(), password.getText().toString(), email.getText().toString(), code.getText().toString()));
+            box.addView(registerTools, new LinearLayout.LayoutParams(-1, dp(62)));
+        }
+        showGlassDialog(new AlertDialog.Builder(this).setTitle("在线").setView(box).setPositiveButton("完成", null).create());
+    }
+
+    private boolean isOnlineLoggedIn() { return onlineToken != null && !onlineToken.trim().isEmpty(); }
+
+    private String normalizeOnlineBase(String value) {
+        String base = value == null ? "" : value.trim();
+        while (base.endsWith("/")) base = base.substring(0, base.length() - 1);
+        return base.isEmpty() ? DEFAULT_ONLINE_BASE_URL : base;
+    }
+
+    private void requestOnlineCode(String email) {
+        new Thread(() -> {
+            try {
+                JSONObject body = new JSONObject().put("email", email.trim());
+                JSONObject response = onlineApi("/api/auth/request-code", "POST", body, false);
+                runOnUiThread(() -> toast(response.optString("message", response.optBoolean("emailSent") ? "验证码已发送" : "验证码已生成")));
+            } catch (Exception e) { runOnUiThread(() -> toast("验证码请求失败：" + e.getMessage())); }
+        }).start();
+    }
+
+    private void registerOnline(String username, String password, String email, String code) {
+        new Thread(() -> {
+            try {
+                JSONObject body = new JSONObject().put("username", username.trim()).put("password", password).put("email", email.trim()).put("code", code.trim());
+                JSONObject response = onlineApi("/api/auth/register", "POST", body, false);
+                applyOnlineAuth(response);
+                runOnUiThread(() -> { toast("注册并登录成功"); closeOpenDialogs(); showOnlineCenter(); });
+            } catch (Exception e) { runOnUiThread(() -> toast("注册失败：" + e.getMessage())); }
+        }).start();
+    }
+
+    private void loginOnline(String login, String password) {
+        new Thread(() -> {
+            try {
+                JSONObject body = new JSONObject().put("login", login.trim()).put("password", password);
+                JSONObject response = onlineApi("/api/auth/login", "POST", body, false);
+                applyOnlineAuth(response);
+                runOnUiThread(() -> { toast("登录成功"); closeOpenDialogs(); showOnlineCenter(); });
+            } catch (Exception e) { runOnUiThread(() -> toast("登录失败：" + e.getMessage())); }
+        }).start();
+    }
+
+    private void applyOnlineAuth(JSONObject response) throws JSONException {
+        onlineToken = response.getString("token");
+        JSONObject user = response.getJSONObject("user");
+        onlineUsername = user.optString("username", "");
+        onlineEmail = user.optString("email", "");
+        prefs.edit().putString("onlineToken", onlineToken).putString("onlineUsername", onlineUsername).putString("onlineEmail", onlineEmail).apply();
+    }
+
+    private void uploadSelectedTrack() {
+        if (!isOnlineLoggedIn()) { toast("请先登录"); return; }
+        if (selectedTrack < 0 || selectedTrack >= tracks.size()) { toast("请先选择赛道"); return; }
+        TrackData track = tracks.get(selectedTrack);
+        new Thread(() -> {
+            try {
+                JSONObject response = onlineApi("/api/tracks", "POST", trackToJson(track), true);
+                track.remoteId = response.optString("remoteID", track.remoteId);
+                saveTracks();
+                runOnUiThread(() -> toast("已分享：" + track.name));
+            } catch (Exception e) { runOnUiThread(() -> toast("分享失败：" + e.getMessage())); }
+        }).start();
+    }
+
+    private void fetchOnlineTracks() {
+        new Thread(() -> {
+            try {
+                JSONObject response = onlineApi("/api/tracks", "GET", null, false);
+                JSONArray arr = response.getJSONArray("tracks");
+                runOnUiThread(() -> showOnlineTrackList(arr));
+            } catch (Exception e) { runOnUiThread(() -> toast("分享页加载失败：" + e.getMessage())); }
+        }).start();
+    }
+
+    private void showOnlineTrackList(JSONArray arr) {
+        closeOpenDialogs();
+        LinearLayout box = glassDialogBox();
+        ScrollView scroll = new ScrollView(this);
+        LinearLayout rows = new LinearLayout(this);
+        rows.setOrientation(LinearLayout.VERTICAL);
+        if (arr.length() == 0) rows.addView(label("暂无可下载地图"));
+        for (int i = 0; i < arr.length(); i++) {
+            JSONObject item = arr.optJSONObject(i);
+            if (item == null) continue;
+            String id = item.optString("id");
+            String name = item.optString("trackName", "共享赛道");
+            LinearLayout row = new LinearLayout(this);
+            row.setOrientation(LinearLayout.HORIZONTAL);
+            row.setGravity(Gravity.CENTER_VERTICAL);
+            row.setPadding(dp(12), dp(8), dp(12), dp(8));
+            row.setBackground(glassPanel(14, 12));
+            LinearLayout texts = new LinearLayout(this);
+            texts.setOrientation(LinearLayout.VERTICAL);
+            TextView title = label(name);
+            title.setTypeface(Typeface.DEFAULT_BOLD);
+            TextView meta = label((int) item.optDouble("trackLength", 0) + "m · " + item.optInt("cornerCount") + "弯 · " + item.optInt("pointCount") + "点 · " + item.optString("authorName"));
+            meta.setTextSize(13);
+            meta.setTextColor(Color.argb(170, 255, 255, 255));
+            texts.addView(title);
+            texts.addView(meta);
+            row.addView(texts, new LinearLayout.LayoutParams(0, -2, 1));
+            addButton(row, "下载导入", v -> downloadOnlineTrack(id));
+            addButton(row, "排行榜", v -> showLeaderboard(id, name));
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2);
+            lp.setMargins(0, dp(6), 0, dp(6));
+            rows.addView(row, lp);
+        }
+        scroll.addView(rows);
+        box.addView(scroll, new LinearLayout.LayoutParams(-1, dp(430)));
+        showGlassDialog(new AlertDialog.Builder(this).setTitle("分享页").setView(box).setPositiveButton("完成", null).create());
+    }
+
+    private void downloadOnlineTrack(String remoteId) {
+        new Thread(() -> {
+            try {
+                JSONObject response = onlineApi("/api/tracks/" + URLEncoder.encode(remoteId, "UTF-8") + "/download", "GET", null, false);
+                TrackData track = parseTrack(response.getJSONObject("track").toString(), "共享赛道");
+                if (track.remoteId == null || track.remoteId.isEmpty()) track.remoteId = remoteId;
+                runOnUiThread(() -> { addTrack(track); toast("已下载并导入：" + track.name); closeOpenDialogs(); });
+            } catch (Exception e) { runOnUiThread(() -> toast("下载失败：" + e.getMessage())); }
+        }).start();
+    }
+
+    private void showLeaderboard(String remoteId, String trackName) {
+        new Thread(() -> {
+            try {
+                JSONObject response = onlineApi("/api/tracks/" + URLEncoder.encode(remoteId, "UTF-8") + "/leaderboard", "GET", null, false);
+                JSONArray board = response.getJSONArray("leaderboard");
+                runOnUiThread(() -> showLeaderboardDialog(trackName, board));
+            } catch (Exception e) { runOnUiThread(() -> toast("排行榜加载失败：" + e.getMessage())); }
+        }).start();
+    }
+
+    private void showLeaderboardDialog(String trackName, JSONArray board) {
+        closeOpenDialogs();
+        LinearLayout box = glassDialogBox();
+        if (board.length() == 0) {
+            box.addView(label("暂无圈速"));
+        } else {
+            for (int i = 0; i < board.length(); i++) {
+                JSONObject item = board.optJSONObject(i);
+                if (item == null) continue;
+                TextView row = label("#" + item.optInt("rank") + "  " + item.optString("username") + "  " + formatLapTime(item.optInt("lapTimeMs")) + "  " + (int) item.optDouble("speedKph") + " km/h  GPS ±" + (int) item.optDouble("gpsAccuracy") + "m");
+                row.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
+                box.addView(row);
+            }
+        }
+        showGlassDialog(new AlertDialog.Builder(this).setTitle(trackName + " 排行榜").setView(box).setPositiveButton("完成", null).create());
+    }
+
+    private JSONObject onlineApi(String path, String method, JSONObject body, boolean auth) throws Exception {
+        URL url = new URL(normalizeOnlineBase(onlineBaseUrl) + path);
+        HttpURLConnection con = (HttpURLConnection) url.openConnection();
+        con.setRequestMethod(method);
+        con.setRequestProperty("Content-Type", "application/json; charset=utf-8");
+        con.setConnectTimeout(15000);
+        con.setReadTimeout(25000);
+        if (auth) con.setRequestProperty("Authorization", "Bearer " + onlineToken);
+        if (body != null && !"GET".equals(method)) {
+            con.setDoOutput(true);
+            con.getOutputStream().write(body.toString().getBytes(StandardCharsets.UTF_8));
+        }
+        int code = con.getResponseCode();
+        InputStream stream = code >= 200 && code < 300 ? con.getInputStream() : con.getErrorStream();
+        String raw = stream != null ? readStream(stream) : "";
+        JSONObject response = raw.trim().isEmpty() ? new JSONObject() : new JSONObject(raw);
+        if (code < 200 || code >= 300) throw new IOException(response.optString("error", "服务器错误 " + code));
+        return response;
+    }
+
+    private JSONObject trackToJson(TrackData track) throws JSONException {
+        JSONObject body = new JSONObject();
+        body.put("trackName", track.name);
+        body.put("trackLength", track.length);
+        body.put("cornerCount", track.cornerCount);
+        JSONArray points = new JSONArray();
+        for (TrackPoint p : track.points) {
+            points.put(new JSONObject().put("latitude", p.latitude).put("longitude", p.longitude).put("speed", p.speed).put("color", p.color));
+        }
+        body.put("points", points);
+        return body;
+    }
+
+    private void handleLapTelemetry(Location location) {
+        if (!isOnlineLoggedIn() || selectedTrack < 0 || selectedTrack >= tracks.size()) return;
+        TrackData track = tracks.get(selectedTrack);
+        if (track.remoteId == null || track.remoteId.isEmpty() || track.points.isEmpty()) return;
+        if (!track.remoteId.equals(lapTrackRemoteId)) {
+            lapTrackRemoteId = track.remoteId;
+            lapStartedAt = 0;
+            lastLapSampleAt = 0;
+            wasNearStart = false;
+            lapSamples.clear();
+        }
+        long now = System.currentTimeMillis();
+        if (now - lastLapSampleAt > 400) {
+            lastLapSampleAt = now;
+            double speedKph = location.hasSpeed() ? Math.max(location.getSpeed(), 0) * 3.6 : 0;
+            lapSamples.add(new TrackPoint(location.getLatitude(), location.getLongitude(), speedKph, "green"));
+            while (lapSamples.size() > 700) lapSamples.remove(0);
+        }
+        TrackPoint current = new TrackPoint(location.getLatitude(), location.getLongitude(), 0, "green");
+        boolean nearStart = distanceMeters(current, track.points.get(0)) < 8;
+        if (nearStart && !wasNearStart) {
+            if (lapStartedAt > 0) {
+                long lapTimeMs = now - lapStartedAt;
+                if (lapTimeMs > 15000 && lapSamples.size() >= 20) {
+                    ArrayList<TrackPoint> samples = new ArrayList<>(lapSamples);
+                    uploadLap(track.remoteId, lapTimeMs, location, samples);
+                }
+            }
+            lapStartedAt = now;
+            lapSamples.clear();
+            lastLapSampleAt = 0;
+        }
+        wasNearStart = nearStart;
+    }
+
+    private void uploadLap(String remoteId, long lapTimeMs, Location location, ArrayList<TrackPoint> samples) {
+        new Thread(() -> {
+            try {
+                JSONObject body = new JSONObject();
+                body.put("lapTimeMs", lapTimeMs);
+                body.put("speedKph", location.hasSpeed() ? Math.max(location.getSpeed(), 0) * 3.6 : 0);
+                body.put("gpsAccuracy", location.hasAccuracy() ? location.getAccuracy() : 0);
+                JSONArray arr = new JSONArray();
+                for (TrackPoint p : samples) arr.put(new JSONObject().put("latitude", p.latitude).put("longitude", p.longitude).put("speed", p.speed).put("color", p.color));
+                body.put("samples", arr);
+                onlineApi("/api/tracks/" + URLEncoder.encode(remoteId, "UTF-8") + "/laps", "POST", body, true);
+                runOnUiThread(() -> toast("圈速已上传：" + formatLapTime((int) lapTimeMs)));
+            } catch (Exception e) { runOnUiThread(() -> toast("圈速上传失败：" + e.getMessage())); }
+        }).start();
+    }
+
+    private String formatLapTime(int milliseconds) {
+        int minutes = milliseconds / 60000;
+        int seconds = (milliseconds % 60000) / 1000;
+        int millis = milliseconds % 1000;
+        return String.format(Locale.US, "%d:%02d.%03d", minutes, seconds, millis);
     }
 
     private void showTrackList() {
@@ -760,7 +1072,7 @@ public class MainActivity extends Activity {
     private void showMapDrawer() { isMainScreen = false; pauseCamera(); setContentView(new MapDrawerView(this)); }
     private void backHome() { isMainScreen = true; buildMainUi(); if (selectedTrack >= 0) selectTrack(selectedTrack); requestCameraIfNeeded(); startLocationUpdatesIfAllowed(); }
 
-    private void saveTracks() { try { JSONArray arr = new JSONArray(); for (TrackData t : tracks) { JSONObject o = new JSONObject(); o.put("trackName", t.name); o.put("trackLength", t.length); o.put("cornerCount", t.cornerCount); JSONArray pts = new JSONArray(); for (TrackPoint p : t.points) { JSONObject po = new JSONObject(); po.put("latitude", p.latitude); po.put("longitude", p.longitude); po.put("speed", p.speed); po.put("color", p.color); pts.put(po); } o.put("points", pts); arr.put(o); } prefs.edit().putString("tracks", arr.toString()).apply(); } catch (Exception ignored) {} }
+    private void saveTracks() { try { JSONArray arr = new JSONArray(); for (TrackData t : tracks) { JSONObject o = new JSONObject(); if (t.remoteId != null && !t.remoteId.isEmpty()) o.put("remoteID", t.remoteId); o.put("trackName", t.name); o.put("trackLength", t.length); o.put("cornerCount", t.cornerCount); JSONArray pts = new JSONArray(); for (TrackPoint p : t.points) { JSONObject po = new JSONObject(); po.put("latitude", p.latitude); po.put("longitude", p.longitude); po.put("speed", p.speed); po.put("color", p.color); pts.put(po); } o.put("points", pts); arr.put(o); } prefs.edit().putString("tracks", arr.toString()).apply(); } catch (Exception ignored) {} }
     private void loadTracks() { try { String raw = prefs.getString("tracks", null); if (raw == null) return; JSONArray arr = new JSONArray(raw); for (int i = 0; i < arr.length(); i++) tracks.add(parseTrack(arr.getJSONObject(i).toString(), "本地赛道")); } catch (Exception ignored) {} }
 
     private void startCameraWhenReady() { if (!isMainScreen || cameraPreview == null) return; cameraPreview.setSurfaceTextureListener(new TextureView.SurfaceTextureListener() { public void onSurfaceTextureAvailable(SurfaceTexture s, int w, int h) { openCamera(s); } public void onSurfaceTextureSizeChanged(SurfaceTexture s, int w, int h) {} public boolean onSurfaceTextureDestroyed(SurfaceTexture s) { pauseCamera(); return true; } public void onSurfaceTextureUpdated(SurfaceTexture s) {} }); if (cameraPreview.isAvailable()) openCamera(cameraPreview.getSurfaceTexture()); }
@@ -1143,6 +1455,7 @@ public class MainActivity extends Activity {
 
     static final class TrackData {
         String name = "Track";
+        String remoteId = "";
         double length;
         int cornerCount;
         final ArrayList<TrackPoint> points = new ArrayList<>();

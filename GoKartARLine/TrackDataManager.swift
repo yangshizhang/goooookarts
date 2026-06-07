@@ -42,6 +42,12 @@ final class TrackDataManager: ObservableObject {
         saveTracks()
     }
 
+    func setRemoteID(for trackID: TrackData.ID, remoteID: String) {
+        guard let index = tracks.firstIndex(where: { $0.id == trackID }) else { return }
+        tracks[index].remoteID = remoteID
+        saveTracks()
+    }
+
     func deleteTracks(at offsets: IndexSet) {
         tracks.remove(atOffsets: offsets)
         if let selectedTrackID, !tracks.contains(where: { $0.id == selectedTrackID }) { self.selectedTrackID = tracks.first?.id }
