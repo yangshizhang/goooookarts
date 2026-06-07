@@ -650,7 +650,9 @@ public class MainActivity extends Activity {
             item.setTextColor(Color.WHITE);
             item.setTextSize(15);
             item.setId(View.generateViewId());
-            group.addView(item, new RadioGroup.LayoutParams(0, dp(46), 1));
+            RadioGroup.LayoutParams itemParams = new RadioGroup.LayoutParams(0, dp(46));
+            itemParams.weight = 1;
+            group.addView(item, itemParams);
             if (i == checkedIndex) group.check(item.getId());
         }
         return group;
