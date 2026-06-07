@@ -775,10 +775,10 @@ public class MainActivity extends Activity {
     private double distanceMeters(TrackPoint a, TrackPoint b) { double dLat = Math.toRadians(b.latitude - a.latitude), dLon = Math.toRadians(b.longitude - a.longitude), lat1 = Math.toRadians(a.latitude), lat2 = Math.toRadians(b.latitude); double h = Math.sin(dLat / 2) * Math.sin(dLat / 2) + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLon / 2) * Math.sin(dLon / 2); return 6371000.0 * 2.0 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h)); }
 
     final class MapDrawerView extends LinearLayout {
-        final DrawCanvas canvas;
-        final EditText search;
-        final EditText trackName;
-        final TextView message;
+        DrawCanvas canvas;
+        EditText search;
+        EditText trackName;
+        TextView message;
 
         MapDrawerView(Context context) {
             super(context);
