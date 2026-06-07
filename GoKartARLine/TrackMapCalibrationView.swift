@@ -22,7 +22,7 @@ struct TrackMapCalibrationView: View {
                         Canvas { context, size in
                             drawTrack(context: context, size: size)
                         }
-                        .background(.black.opacity(0.08), in: RoundedRectangle(cornerRadius: 16))
+                        .background(.black, in: RoundedRectangle(cornerRadius: 16))
                         .gesture(DragGesture(minimumDistance: 0).onEnded { value in
                             selectedIndex = nearestPointIndex(to: value.location, size: proxy.size)
                         })
@@ -59,6 +59,8 @@ struct TrackMapCalibrationView: View {
                     }
                     Slider(value: $headingDegrees, in: 0...359, step: 1)
                 }
+                .padding(12)
+                .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
 
                 VStack(alignment: .leading, spacing: 4) {
                     Text("当前位置点：#\(track.points.isEmpty ? 0 : selectedIndex + 1) / \(track.points.count)")
@@ -78,15 +80,17 @@ struct TrackMapCalibrationView: View {
                     Label("加载赛道并应用校准", systemImage: "location.north.line.fill")
                         .frame(maxWidth: .infinity)
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.glassProminent)
                 .disabled(track.points.isEmpty)
             }
             .padding()
+            .background(.black)
             .navigationTitle("校准地图")
             .navigationBarTitleDisplayMode(.inline)
             .navigationBarItems(trailing: Button("取消") { dismiss() })
             .onAppear { selectedIndex = min(selectedIndex, max(track.points.count - 1, 0)) }
         }
+        .background(.black)
     }
 
     private func drawTrack(context: GraphicsContext, size: CGSize) {

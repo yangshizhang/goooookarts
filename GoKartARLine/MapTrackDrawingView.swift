@@ -42,7 +42,7 @@ struct MapTrackDrawingView: View {
                     } label: {
                         if isSearching { ProgressView() } else { Image(systemName: "magnifyingglass") }
                     }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.glassProminent)
                     .disabled(searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isSearching)
                 }
 
@@ -52,6 +52,7 @@ struct MapTrackDrawingView: View {
                     }
                 }
                 .pickerStyle(.segmented)
+                .glassEffect(.regular, in: Capsule())
 
                 AMapTrackDrawingMapView(
                     coordinates: $coordinates,
@@ -68,7 +69,7 @@ struct MapTrackDrawingView: View {
                             .font(.caption)
                     }
                     .padding(10)
-                    .background(.black.opacity(0.58), in: RoundedRectangle(cornerRadius: 12))
+                    .background(.black, in: RoundedRectangle(cornerRadius: 12))
                     .foregroundStyle(.white)
                     .padding()
                 }
@@ -89,7 +90,7 @@ struct MapTrackDrawingView: View {
                     Button("首尾相接") { closeLoop() }
                         .disabled(coordinates.count < 3 || isClosed || isGenerating)
                 }
-                .buttonStyle(.bordered)
+                .buttonStyle(.glass)
 
                 Button {
                     Task { await generateBrakeZones() }
@@ -101,10 +102,11 @@ struct MapTrackDrawingView: View {
                             .frame(maxWidth: .infinity)
                     }
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.glassProminent)
                 .disabled(!isClosed || coordinates.count < 4 || isGenerating)
             }
             .padding()
+            .background(.black)
             .navigationTitle("地图绘制赛道")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("关闭") { dismiss() } } }
@@ -112,6 +114,7 @@ struct MapTrackDrawingView: View {
                 Button("知道了", role: .cancel) {}
             } message: { Text(errorMessage ?? "") }
         }
+        .background(.black)
     }
 
     private func searchPlace() async {

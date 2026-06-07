@@ -9,6 +9,7 @@ struct ARViewContainer: UIViewRepresentable {
     var fusedPose: FusedPose?
     var settings: ARLineSettings
     var mapHeadingOffsetDegrees: Double = 0
+    var isCameraActive = true
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
@@ -17,7 +18,7 @@ struct ARViewContainer: UIViewRepresentable {
         view.delegate = context.coordinator
         view.automaticallyUpdatesLighting = false
         view.preferredFramesPerSecond = settings.powerSavingMode ? 30 : 60
-        context.coordinator.configureSession(for: view, settings: settings)
+        context.coordinator.configureSession(for: view, settings: settings, isCameraActive: isCameraActive)
         context.coordinator.installNotifications(view: view)
         return view
     }
@@ -29,8 +30,13 @@ struct ARViewContainer: UIViewRepresentable {
         context.coordinator.fusedPose = fusedPose
         context.coordinator.settings = settings
         context.coordinator.mapHeadingOffsetDegrees = mapHeadingOffsetDegrees
+        context.coordinator.setCameraActive(isCameraActive, for: view)
         context.coordinator.updateSessionIfNeeded(for: view)
         context.coordinator.renderDrivingLine(in: view)
+    }
+
+    static func dismantleUIView(_ view: ARSCNView, coordinator: Coordinator) {
+        coordinator.setCameraActive(false, for: view)
     }
 
     final class Coordinator: NSObject, ARSCNViewDelegate {
@@ -42,21 +48,39 @@ struct ARViewContainer: UIViewRepresentable {
         private let lineNode = SCNNode()
         private let cameraHeightAboveGround: Float = 1.1
         private var appliedVideoResolution: ARVideoResolution?
+        private var isCameraActive = true
+        private var isSessionRunning = false
         private var maximumVisibleDistance: Float { Float(settings.renderDistance) }
         private var fadeStartDistance: Float { max(10, maximumVisibleDistance * 0.45) }
         private var lineWidth: Float { Float(settings.width) }
         private var groundOffset: Float { Float(settings.heightOffset) }
 
-        func configureSession(for view: ARSCNView, settings: ARLineSettings) {
+        func configureSession(for view: ARSCNView, settings: ARLineSettings, isCameraActive: Bool) {
             self.settings = settings
+            self.isCameraActive = isCameraActive
             view.scene = SCNScene()
             view.scene.rootNode.addChildNode(lineNode)
-            runSession(for: view, resetTracking: true)
+            if isCameraActive {
+                runSession(for: view, resetTracking: true)
+            } else {
+                pauseSession(for: view)
+            }
         }
 
         func updateSessionIfNeeded(for view: ARSCNView) {
+            guard isCameraActive else { return }
             guard appliedVideoResolution != settings.videoResolution else { return }
             runSession(for: view, resetTracking: false)
+        }
+
+        func setCameraActive(_ active: Bool, for view: ARSCNView) {
+            guard active != isCameraActive else { return }
+            isCameraActive = active
+            if active {
+                runSession(for: view, resetTracking: false)
+            } else {
+                pauseSession(for: view)
+            }
         }
 
         private func runSession(for view: ARSCNView, resetTracking: Bool) {
@@ -69,6 +93,14 @@ struct ARViewContainer: UIViewRepresentable {
             }
             appliedVideoResolution = settings.videoResolution
             view.session.run(configuration, options: resetTracking ? [.resetTracking, .removeExistingAnchors] : [])
+            isSessionRunning = true
+        }
+
+        private func pauseSession(for view: ARSCNView) {
+            guard isSessionRunning else { return }
+            view.session.pause()
+            lineNode.geometry = nil
+            isSessionRunning = false
         }
 
         private static func bestVideoFormat(for resolution: ARVideoResolution) -> ARConfiguration.VideoFormat? {
@@ -79,7 +111,7 @@ struct ARViewContainer: UIViewRepresentable {
 
         func installNotifications(view: ARSCNView) {
             NotificationCenter.default.addObserver(forName: .captureARStillImage, object: nil, queue: .main) { [weak view] _ in
-                guard let image = view?.snapshot() else { return }
+            guard let image = view?.snapshot() else { return }
                 UIImageWriteToSavedPhotosAlbum(image, nil, nil, nil)
             }
         }
@@ -93,6 +125,10 @@ struct ARViewContainer: UIViewRepresentable {
         }
 
         func renderDrivingLine(in view: ARSCNView) {
+            guard isCameraActive else {
+                lineNode.geometry = nil
+                return
+            }
             guard let camera = view.pointOfView else {
                 lineNode.geometry = nil
                 return

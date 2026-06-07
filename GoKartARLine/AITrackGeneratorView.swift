@@ -24,7 +24,7 @@ struct AITrackGeneratorView: View {
                     Label(selectedImage == nil ? "选择赛道照片" : "更换赛道照片", systemImage: "photo")
                         .frame(maxWidth: .infinity)
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.glassProminent)
 
                 VStack(spacing: 10) {
                     SecureField("AI接口Key（保存在本机Keychain）", text: $apiKey)
@@ -36,7 +36,7 @@ struct AITrackGeneratorView: View {
                 .autocorrectionDisabled()
                 .textInputAutocapitalization(.never)
                 .padding(12)
-                .background(.secondary.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
+                .background(.black, in: RoundedRectangle(cornerRadius: 12))
 
                 imageSelectionArea
 
@@ -54,10 +54,11 @@ struct AITrackGeneratorView: View {
                         Label("AI生成并导入赛道", systemImage: "sparkles")
                     }
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.glassProminent)
                 .disabled(selectedImage == nil || finishPoint == nil || apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || modelID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || baseURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isGenerating)
             }
             .padding()
+            .background(.black)
             .navigationTitle("AI生成赛道")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("关闭") { dismiss() } } }
@@ -66,13 +67,14 @@ struct AITrackGeneratorView: View {
                 Button("知道了", role: .cancel) {}
             } message: { Text(errorMessage ?? "") }
         }
+        .background(.black)
     }
 
     private var imageSelectionArea: some View {
         GeometryReader { proxy in
             ZStack {
                 RoundedRectangle(cornerRadius: 16)
-                    .fill(.black.opacity(0.08))
+                    .fill(.black)
                 if let selectedImage {
                     Image(uiImage: selectedImage)
                         .resizable()

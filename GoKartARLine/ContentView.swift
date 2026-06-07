@@ -14,7 +14,8 @@ struct ContentView: View {
 
     var body: some View {
         ZStack {
-            ARViewContainer(track: trackDataManager.selectedTrack, originCoordinate: locationManager.originCoordinate, fusedPose: locationManager.fusedPose, settings: settings, mapHeadingOffsetDegrees: locationManager.mapHeadingOffsetDegrees)
+            Color.black.ignoresSafeArea()
+            ARViewContainer(track: trackDataManager.selectedTrack, originCoordinate: locationManager.originCoordinate, fusedPose: locationManager.fusedPose, settings: settings, mapHeadingOffsetDegrees: locationManager.mapHeadingOffsetDegrees, isCameraActive: isMainInterfaceActive)
                 .ignoresSafeArea()
             VStack(spacing: 12) {
                 topHUD
@@ -53,17 +54,18 @@ struct ContentView: View {
     }
 
     private var bottomControls: some View {
-        HStack(spacing: 10) {
-            Button("导入") { isImporting = true }
-            Button("赛道") { showingTrackList = true }
-            Button("校准") { locationManager.manualCalibrate(using: trackDataManager.selectedTrack) }
-            Button(isRecording ? "停止" : "录屏") { toggleRecording() }
-            Button("截图") { NotificationCenter.default.post(name: .captureARStillImage, object: nil) }
-            Button("设置") { showingSettings = true }
+        GlassEffectContainer(spacing: 10) {
+            HStack(spacing: 10) {
+                Button("导入") { isImporting = true }
+                Button("赛道") { showingTrackList = true }
+                Button("校准") { locationManager.manualCalibrate(using: trackDataManager.selectedTrack) }
+                Button(isRecording ? "停止" : "录屏") { toggleRecording() }
+                Button("截图") { NotificationCenter.default.post(name: .captureARStillImage, object: nil) }
+                Button("设置") { showingSettings = true }
+            }
         }
-        .buttonStyle(.borderedProminent)
+        .buttonStyle(.glassProminent)
         .controlSize(.large)
-        .background(.black.opacity(0.25), in: Capsule())
     }
 
     private func metricCard(title: String, value: String) -> some View {
@@ -73,6 +75,10 @@ struct ContentView: View {
         }
         .padding(.horizontal, 14).padding(.vertical, 8)
         .background(.black.opacity(0.55), in: RoundedRectangle(cornerRadius: 14))
+    }
+
+    private var isMainInterfaceActive: Bool {
+        !isImporting && !showingSettings && !showingTrackList
     }
 
 
@@ -161,6 +167,8 @@ private struct TrackListView: View {
                 }
                 .onDelete(perform: manager.deleteTracks)
             }
+            .scrollContentBackground(.hidden)
+            .background(.black)
             .navigationTitle("已导入赛道")
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
@@ -171,6 +179,7 @@ private struct TrackListView: View {
                 }
                 ToolbarItem(placement: .topBarTrailing) { Button("完成") { dismiss() } }
             }
+            .buttonStyle(.glass)
             .sheet(isPresented: $showingAITrackGenerator) {
                 AITrackGeneratorView()
                     .environmentObject(manager)
