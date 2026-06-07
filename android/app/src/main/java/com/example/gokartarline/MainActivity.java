@@ -8,6 +8,10 @@ import android.content.pm.PackageManager;
 import android.graphics.*;
 import android.graphics.drawable.*;
 import android.graphics.SurfaceTexture;
+import android.hardware.Sensor;
+import android.hardware.SensorEvent;
+import android.hardware.SensorEventListener;
+import android.hardware.SensorManager;
 import android.hardware.display.DisplayManager;
 import android.hardware.display.VirtualDisplay;
 import android.hardware.camera2.*;
@@ -34,13 +38,18 @@ public class MainActivity extends Activity {
     private FrameLayout rootView;
     private TextureView cameraPreview;
     private DrivingLineOverlay overlay;
-    private TextView hintText, speedValue, brakeValue, gpsValue;
+    private TextView hintText, speedValue, brakeValue, lineDeviationValue, gpsValue;
     private Button recordButton;
     private CameraDevice cameraDevice;
     private CameraCaptureSession cameraSession;
     private android.location.LocationManager locationService;
     private LocationListener locationListener;
     private Location latestLocation;
+    private SensorManager sensorManager;
+    private SensorEventListener accelerationListener;
+    private float latestAccelerationX = 0f;
+    private float latestAccelerationY = 0f;
+    private float latestAccelerationZ = 0f;
     private SharedPreferences prefs;
     private final ArrayList<TrackData> tracks = new ArrayList<>();
     private int selectedTrack = -1;
@@ -74,7 +83,7 @@ public class MainActivity extends Activity {
     private long lapStartedAt = 0;
     private long lastLapSampleAt = 0;
     private boolean wasNearStart = false;
-    private final ArrayList<TrackPoint> lapSamples = new ArrayList<>();
+    private final ArrayList<TelemetrySample> lapSamples = new ArrayList<>();
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
@@ -99,6 +108,7 @@ public class MainActivity extends Activity {
         if (tracks.isEmpty()) loadSampleTrack(); else selectTrack(Math.max(0, prefs.getInt("selectedTrack", 0)));
         requestCameraIfNeeded();
         startLocationUpdatesIfAllowed();
+        startAccelerationUpdates();
     }
 
     private void buildMainUi() {
@@ -131,6 +141,7 @@ public class MainActivity extends Activity {
         metrics.setPadding(0, dp(8), 0, 0);
         speedValue = addMetricCard(metrics, "车速");
         brakeValue = addMetricCard(metrics, "刹车点");
+        lineDeviationValue = addMetricCard(metrics, "偏离");
         gpsValue = addMetricCard(metrics, "GPS");
         hud.addView(metrics, new LinearLayout.LayoutParams(-2, -2));
         FrameLayout.LayoutParams hudParams = new FrameLayout.LayoutParams(-2, -2, Gravity.TOP | Gravity.CENTER_HORIZONTAL);
@@ -367,7 +378,7 @@ public class MainActivity extends Activity {
     }
 
     private void updateHud() {
-        if (hintText == null || speedValue == null || brakeValue == null || gpsValue == null) return;
+        if (hintText == null || speedValue == null || brakeValue == null || lineDeviationValue == null || gpsValue == null) return;
         TrackPoint nearest = nearestTrackPoint();
         String hint = selectedTrack >= 0 ? drivingHint(nearest == null ? "green" : nearest.color) : "请导入赛道";
         hintText.setText(hint);
@@ -375,6 +386,7 @@ public class MainActivity extends Activity {
         double speed = latestLocation != null && latestLocation.hasSpeed() ? Math.max(latestLocation.getSpeed(), 0) : 0;
         speedValue.setText(metricUnits ? ((int) (speed * 3.6)) + " km/h" : ((int) (speed * 2.23694)) + " mph");
         brakeValue.setText(brakingDistanceText());
+        lineDeviationValue.setText(lineDeviationText());
         gpsValue.setText(latestLocation != null && latestLocation.hasAccuracy() ? "±" + (int) latestLocation.getAccuracy() + "m" : "--");
     }
 
@@ -387,6 +399,11 @@ public class MainActivity extends Activity {
             best = Math.min(best, distanceMeters(current, point));
         }
         return best == Double.MAX_VALUE ? "--" : ((int) best) + " m";
+    }
+
+    private String lineDeviationText() {
+        if (latestLocation == null || selectedTrack < 0 || selectedTrack >= tracks.size()) return "--";
+        return ((int) lineDeviationMeters(latestLocation, tracks.get(selectedTrack))) + " m";
     }
 
     private TrackPoint nearestTrackPoint() {
@@ -497,6 +514,31 @@ public class MainActivity extends Activity {
             latestLocation = locationService.getLastKnownLocation(provider);
             updateHud();
         } catch (Exception e) { toast("定位失败：" + e.getMessage()); }
+    }
+
+    private void startAccelerationUpdates() {
+        if (sensorManager == null) sensorManager = (SensorManager) getSystemService(SENSOR_SERVICE);
+        if (sensorManager == null) return;
+        Sensor sensor = sensorManager.getDefaultSensor(Sensor.TYPE_LINEAR_ACCELERATION);
+        if (sensor == null) sensor = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER);
+        if (sensor == null) return;
+        if (accelerationListener == null) {
+            accelerationListener = new SensorEventListener() {
+                @Override public void onSensorChanged(SensorEvent event) {
+                    if (event.values.length < 3) return;
+                    latestAccelerationX = event.values[0];
+                    latestAccelerationY = event.values[1];
+                    latestAccelerationZ = event.sensor.getType() == Sensor.TYPE_ACCELEROMETER ? event.values[2] - SensorManager.GRAVITY_EARTH : event.values[2];
+                }
+                @Override public void onAccuracyChanged(Sensor sensor, int accuracy) {}
+            };
+        }
+        sensorManager.unregisterListener(accelerationListener);
+        sensorManager.registerListener(accelerationListener, sensor, SensorManager.SENSOR_DELAY_GAME);
+    }
+
+    private void stopAccelerationUpdates() {
+        if (sensorManager != null && accelerationListener != null) sensorManager.unregisterListener(accelerationListener);
     }
 
     private void pauseCamera() {
@@ -798,7 +840,8 @@ public class MainActivity extends Activity {
             for (int i = 0; i < board.length(); i++) {
                 JSONObject item = board.optJSONObject(i);
                 if (item == null) continue;
-                TextView row = label("#" + item.optInt("rank") + "  " + item.optString("username") + "  " + formatLapTime(item.optInt("lapTimeMs")) + "  " + (int) item.optDouble("speedKph") + " km/h  GPS ±" + (int) item.optDouble("gpsAccuracy") + "m");
+                TextView row = label("#" + item.optInt("rank") + "  " + item.optString("username") + "  " + formatLapTime(item.optInt("lapTimeMs")) + "  " + (int) item.optDouble("speedKph") + " km/h  GPS ±" + (int) item.optDouble("gpsAccuracy") + "m"
+                        + "\n油门 " + item.optInt("throttleScore") + "%  刹车 " + item.optInt("brakeScore") + "%  偏离 " + String.format(Locale.US, "%.1fm", item.optDouble("lineDeviationAvg")));
                 row.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
                 box.addView(row);
             }
@@ -855,7 +898,8 @@ public class MainActivity extends Activity {
         if (now - lastLapSampleAt > 400) {
             lastLapSampleAt = now;
             double speedKph = location.hasSpeed() ? Math.max(location.getSpeed(), 0) * 3.6 : 0;
-            lapSamples.add(new TrackPoint(location.getLatitude(), location.getLongitude(), speedKph, "green"));
+            double deviation = lineDeviationMeters(location, track);
+            lapSamples.add(new TelemetrySample(location.getLatitude(), location.getLongitude(), speedKph, "green", latestAccelerationY, latestAccelerationY, latestAccelerationX, deviation));
             while (lapSamples.size() > 700) lapSamples.remove(0);
         }
         TrackPoint current = new TrackPoint(location.getLatitude(), location.getLongitude(), 0, "green");
@@ -864,7 +908,7 @@ public class MainActivity extends Activity {
             if (lapStartedAt > 0) {
                 long lapTimeMs = now - lapStartedAt;
                 if (lapTimeMs > 15000 && lapSamples.size() >= 20) {
-                    ArrayList<TrackPoint> samples = new ArrayList<>(lapSamples);
+                    ArrayList<TelemetrySample> samples = new ArrayList<>(lapSamples);
                     uploadLap(track.remoteId, lapTimeMs, location, samples);
                 }
             }
@@ -875,7 +919,7 @@ public class MainActivity extends Activity {
         wasNearStart = nearStart;
     }
 
-    private void uploadLap(String remoteId, long lapTimeMs, Location location, ArrayList<TrackPoint> samples) {
+    private void uploadLap(String remoteId, long lapTimeMs, Location location, ArrayList<TelemetrySample> samples) {
         new Thread(() -> {
             try {
                 JSONObject body = new JSONObject();
@@ -883,12 +927,23 @@ public class MainActivity extends Activity {
                 body.put("speedKph", location.hasSpeed() ? Math.max(location.getSpeed(), 0) * 3.6 : 0);
                 body.put("gpsAccuracy", location.hasAccuracy() ? location.getAccuracy() : 0);
                 JSONArray arr = new JSONArray();
-                for (TrackPoint p : samples) arr.put(new JSONObject().put("latitude", p.latitude).put("longitude", p.longitude).put("speed", p.speed).put("color", p.color));
+                for (TelemetrySample p : samples) arr.put(p.toJson());
                 body.put("samples", arr);
-                onlineApi("/api/tracks/" + URLEncoder.encode(remoteId, "UTF-8") + "/laps", "POST", body, true);
-                runOnUiThread(() -> toast("圈速已上传：" + formatLapTime((int) lapTimeMs)));
+                JSONObject response = onlineApi("/api/tracks/" + URLEncoder.encode(remoteId, "UTF-8") + "/laps", "POST", body, true);
+                String summary = lapAnalysisMessage(lapTimeMs, response.optJSONObject("analysis"));
+                runOnUiThread(() -> toast(summary));
             } catch (Exception e) { runOnUiThread(() -> toast("圈速上传失败：" + e.getMessage())); }
         }).start();
+    }
+
+    private String lapAnalysisMessage(long lapTimeMs, JSONObject analysis) {
+        if (analysis == null) return "圈速已上传：" + formatLapTime((int) lapTimeMs);
+        JSONArray suggestions = analysis.optJSONArray("suggestions");
+        String suggestion = suggestions != null && suggestions.length() > 0 ? suggestions.optString(0) : "暂无建议";
+        return "圈速已上传：" + formatLapTime((int) lapTimeMs)
+                + "\n油门 " + analysis.optInt("throttleScore") + "% · 刹车 " + analysis.optInt("brakeScore") + "%"
+                + " · 偏离 " + String.format(Locale.US, "%.1fm", analysis.optDouble("lineDeviationAvg"))
+                + "\n" + suggestion;
     }
 
     private String formatLapTime(int milliseconds) {
@@ -1216,11 +1271,14 @@ public class MainActivity extends Activity {
     private void openCamera(SurfaceTexture st) { if (!isMainScreen) return; try { CameraManager m = (CameraManager) getSystemService(CAMERA_SERVICE); String id = findBackCamera(m); if (id == null) { showNoCameraBackground("无相机：模拟器预览模式"); return; } st.setDefaultBufferSize(lowHeatMode ? 1280 : 1920, lowHeatMode ? 720 : 1080); if (checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) return; m.openCamera(id, new CameraDevice.StateCallback() { public void onOpened(CameraDevice c) { cameraDevice = c; startPreview(st); } public void onDisconnected(CameraDevice c) { c.close(); } public void onError(CameraDevice c, int e) { c.close(); showNoCameraBackground("相机错误：" + e); } }, null); } catch (Exception e) { showNoCameraBackground("无可用相机：" + e.getMessage()); } }
     private String findBackCamera(CameraManager m) throws CameraAccessException { for (String id : m.getCameraIdList()) { Integer f = m.getCameraCharacteristics(id).get(CameraCharacteristics.LENS_FACING); if (f != null && f == CameraCharacteristics.LENS_FACING_BACK) return id; } return m.getCameraIdList().length > 0 ? m.getCameraIdList()[0] : null; }
     private void startPreview(SurfaceTexture t) { try { Surface s = new Surface(t); CaptureRequest.Builder b = cameraDevice.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW); b.addTarget(s); cameraDevice.createCaptureSession(Collections.singletonList(s), new CameraCaptureSession.StateCallback() { public void onConfigured(CameraCaptureSession session) { cameraSession = session; try { session.setRepeatingRequest(b.build(), null, null); } catch (Exception e) { showNoCameraBackground("预览失败"); } } public void onConfigureFailed(CameraCaptureSession session) { showNoCameraBackground("预览配置失败"); } }, null); } catch (Exception e) { showNoCameraBackground("预览失败：" + e.getMessage()); } }
-    @Override protected void onDestroy() { super.onDestroy(); stopScreenRecordingIfNeeded(); pauseCamera(); if (locationService != null && locationListener != null) locationService.removeUpdates(locationListener); }
+    @Override protected void onDestroy() { super.onDestroy(); stopScreenRecordingIfNeeded(); pauseCamera(); stopAccelerationUpdates(); if (locationService != null && locationListener != null) locationService.removeUpdates(locationListener); }
 
     private void toast(String s) { Toast.makeText(this, s, Toast.LENGTH_LONG).show(); }
     private double computeLength(List<TrackPoint> pts) { double d = 0; for (int i = 1; i < pts.size(); i++) d += distanceMeters(pts.get(i - 1), pts.get(i)); return d; }
     private double distanceMeters(TrackPoint a, TrackPoint b) { double dLat = Math.toRadians(b.latitude - a.latitude), dLon = Math.toRadians(b.longitude - a.longitude), lat1 = Math.toRadians(a.latitude), lat2 = Math.toRadians(b.latitude); double h = Math.sin(dLat / 2) * Math.sin(dLat / 2) + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLon / 2) * Math.sin(dLon / 2); return 6371000.0 * 2.0 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h)); }
+    private double lineDeviationMeters(Location location, TrackData track) { return lineDeviationMeters(new TrackPoint(location.getLatitude(), location.getLongitude(), 0, "green"), track.points); }
+    private double lineDeviationMeters(TrackPoint point, List<TrackPoint> points) { if (points.size() < 2) return 0; double best = Double.MAX_VALUE; for (int i = 1; i < points.size(); i++) best = Math.min(best, distanceToSegmentMeters(point, points.get(i - 1), points.get(i))); return best == Double.MAX_VALUE ? 0 : Math.min(best, 80); }
+    private double distanceToSegmentMeters(TrackPoint point, TrackPoint start, TrackPoint end) { double latScale = Math.PI / 180.0 * 6371000.0; double lonScale = latScale * Math.cos(Math.toRadians(point.latitude)); double ax = (start.longitude - point.longitude) * lonScale, ay = (start.latitude - point.latitude) * latScale, bx = (end.longitude - point.longitude) * lonScale, by = (end.latitude - point.latitude) * latScale; double dx = bx - ax, dy = by - ay, lengthSquared = dx * dx + dy * dy; if (lengthSquared <= 0.000001) return distanceMeters(point, start); double t = Math.max(0, Math.min(1, -(ax * dx + ay * dy) / lengthSquared)); double nx = ax + dx * t, ny = ay + dy * t; return Math.sqrt(nx * nx + ny * ny); }
 
     final class MapDrawerView extends LinearLayout {
         DrawCanvas canvas;
@@ -1678,6 +1736,40 @@ public class MainActivity extends Activity {
             this.longitude = longitude;
             this.speed = speed;
             this.color = color;
+        }
+    }
+
+    static final class TelemetrySample {
+        final double latitude;
+        final double longitude;
+        final double speed;
+        final String color;
+        final double acceleration;
+        final double longitudinalAcceleration;
+        final double lateralAcceleration;
+        final double lineDeviationMeters;
+
+        TelemetrySample(double latitude, double longitude, double speed, String color, double acceleration, double longitudinalAcceleration, double lateralAcceleration, double lineDeviationMeters) {
+            this.latitude = latitude;
+            this.longitude = longitude;
+            this.speed = speed;
+            this.color = color;
+            this.acceleration = acceleration;
+            this.longitudinalAcceleration = longitudinalAcceleration;
+            this.lateralAcceleration = lateralAcceleration;
+            this.lineDeviationMeters = lineDeviationMeters;
+        }
+
+        JSONObject toJson() throws JSONException {
+            return new JSONObject()
+                    .put("latitude", latitude)
+                    .put("longitude", longitude)
+                    .put("speed", speed)
+                    .put("color", color)
+                    .put("acceleration", acceleration)
+                    .put("longitudinalAcceleration", longitudinalAcceleration)
+                    .put("lateralAcceleration", lateralAcceleration)
+                    .put("lineDeviationMeters", lineDeviationMeters);
         }
     }
 

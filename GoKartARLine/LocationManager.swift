@@ -99,7 +99,10 @@ final class LocationManager: NSObject, ObservableObject {
         kalman.update(location: latestLocation, motion: latestMotion)
         let coordinate = kalman.currentCoordinate ?? latestLocation.coordinate
         let speed = max(kalman.currentSpeed, latestLocation.speed >= 0 ? latestLocation.speed : 0)
-        fusedPose = FusedPose(coordinate: coordinate, speed: speed, course: latestLocation.course, yaw: latestMotion?.attitude.yaw ?? 0, timestamp: Date(), horizontalAccuracy: latestLocation.horizontalAccuracy)
+        let userAcceleration = latestMotion?.userAcceleration
+        let longitudinalAcceleration = (userAcceleration?.y ?? 0) * 9.80665
+        let lateralAcceleration = (userAcceleration?.x ?? 0) * 9.80665
+        fusedPose = FusedPose(coordinate: coordinate, speed: speed, course: latestLocation.course, yaw: latestMotion?.attitude.yaw ?? 0, timestamp: Date(), horizontalAccuracy: latestLocation.horizontalAccuracy, longitudinalAcceleration: longitudinalAcceleration, lateralAcceleration: lateralAcceleration)
     }
 }
 

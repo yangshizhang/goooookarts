@@ -29,9 +29,31 @@ struct OnlineLeaderboardEntry: Codable, Identifiable, Hashable {
     var lapTimeMs: Int
     var speedKph: Double
     var gpsAccuracy: Double
+    var throttleScore: Int?
+    var brakeScore: Int?
+    var lineDeviationAvg: Double?
+    var lineDeviationMax: Double?
+    var smoothnessScore: Int?
+    var suggestions: [String]?
+    var analysis: OnlineLapAnalysis?
     var createdAt: String
 
     var id: String { "\(rank)-\(username)-\(lapTimeMs)" }
+}
+
+struct OnlineLapAnalysis: Codable, Hashable {
+    var sampleCount: Int
+    var throttleScore: Int
+    var throttleAvg: Double
+    var throttleMax: Double
+    var brakeScore: Int
+    var brakeAvg: Double
+    var brakeMax: Double
+    var lateralAvg: Double
+    var lineDeviationAvg: Double
+    var lineDeviationMax: Double
+    var smoothnessScore: Int
+    var suggestions: [String]
 }
 
 @MainActor
@@ -143,28 +165,33 @@ final class OnlineSyncManager: ObservableObject {
         let distanceToStart = GeoConverter.distanceMeters(from: pose.coordinate, to: start)
         let isNearStart = distanceToStart < 8
         if lapState.trackID != remoteID { lapState = LapState(trackID: remoteID) }
-        lapState.append(pose: pose)
+        lapState.append(pose: pose, track: track)
         defer { lapState.wasNearStart = isNearStart }
         guard isNearStart, !lapState.wasNearStart else { return }
         if let startedAt = lapState.startedAt {
             let lapTime = Date().timeIntervalSince(startedAt)
             guard lapTime > 15, lapState.samples.count >= 20 else {
-                lapState.restart(at: Date(), firstPose: pose)
+                lapState.restart(at: Date(), firstPose: pose, track: track)
                 return
             }
             let samples = lapState.samples
-            lapState.restart(at: Date(), firstPose: pose)
+            lapState.restart(at: Date(), firstPose: pose, track: track)
             Task { await submitLap(trackID: remoteID, lapTimeMs: Int(lapTime * 1000), pose: pose, samples: samples) }
         } else {
-            lapState.restart(at: Date(), firstPose: pose)
+            lapState.restart(at: Date(), firstPose: pose, track: track)
         }
     }
 
     private func submitLap(trackID: String, lapTimeMs: Int, pose: FusedPose, samples: [LapSample]) async {
         do {
             let requestBody = LapUploadRequest(lapTimeMs: lapTimeMs, speedKph: pose.speed * 3.6, gpsAccuracy: pose.horizontalAccuracy, samples: samples)
-            let _: LapUploadResponse = try await request("/api/tracks/\(trackID)/laps", method: "POST", body: requestBody, requiresAuth: true)
-            message = "圈速已上传：\(formatLapTime(lapTimeMs))"
+            let response: LapUploadResponse = try await request("/api/tracks/\(trackID)/laps", method: "POST", body: requestBody, requiresAuth: true)
+            if let analysis = response.analysis {
+                let suggestion = analysis.suggestions.first ?? "暂无建议"
+                message = "圈速已上传：\(formatLapTime(lapTimeMs))\n油门 \(analysis.throttleScore)% · 刹车 \(analysis.brakeScore)% · 偏离 \(String(format: "%.1f", analysis.lineDeviationAvg))m\n\(suggestion)"
+            } else {
+                message = "圈速已上传：\(formatLapTime(lapTimeMs))"
+            }
         } catch {
             message = "圈速上传失败：\(error.localizedDescription)"
         }
@@ -419,6 +446,11 @@ private struct LeaderboardSheet: View {
                             Text("\(Int(entry.speedKph)) km/h · GPS ±\(Int(entry.gpsAccuracy))m")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
+                            if let telemetryText = telemetryText(for: entry) {
+                                Text(telemetryText)
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            }
                         }
                         Spacer()
                         Text(formatLap(entry.lapTimeMs)).font(.headline.monospacedDigit())
@@ -439,6 +471,14 @@ private struct LeaderboardSheet: View {
         let millis = milliseconds % 1000
         return String(format: "%d:%02d.%03d", minutes, seconds, millis)
     }
+
+    private func telemetryText(for entry: OnlineLeaderboardEntry) -> String? {
+        let throttle = entry.analysis?.throttleScore ?? entry.throttleScore
+        let brake = entry.analysis?.brakeScore ?? entry.brakeScore
+        let deviation = entry.analysis?.lineDeviationAvg ?? entry.lineDeviationAvg
+        guard throttle != nil || brake != nil || deviation != nil else { return nil }
+        return "油门 \(throttle ?? 0)% · 刹车 \(brake ?? 0)% · 偏离 \(String(format: "%.1f", deviation ?? 0))m"
+    }
 }
 
 private struct LapState {
@@ -452,17 +492,26 @@ private struct LapState {
         self.trackID = trackID
     }
 
-    mutating func restart(at date: Date, firstPose: FusedPose) {
+    mutating func restart(at date: Date, firstPose: FusedPose, track: TrackData) {
         startedAt = date
         samples = []
         lastSampleAt = .distantPast
-        append(pose: firstPose)
+        append(pose: firstPose, track: track)
     }
 
-    mutating func append(pose: FusedPose) {
+    mutating func append(pose: FusedPose, track: TrackData) {
         guard Date().timeIntervalSince(lastSampleAt) > 0.4 else { return }
         lastSampleAt = Date()
-        samples.append(LapSample(latitude: pose.coordinate.latitude, longitude: pose.coordinate.longitude, speed: pose.speed * 3.6, color: "green"))
+        samples.append(LapSample(
+            latitude: pose.coordinate.latitude,
+            longitude: pose.coordinate.longitude,
+            speed: pose.speed * 3.6,
+            color: "green",
+            acceleration: pose.longitudinalAcceleration,
+            longitudinalAcceleration: pose.longitudinalAcceleration,
+            lateralAcceleration: pose.lateralAcceleration,
+            lineDeviationMeters: GeoConverter.lineDeviationMeters(from: pose.coordinate, along: track.points)
+        ))
         if samples.count > 700 { samples.removeFirst(samples.count - 700) }
     }
 }
@@ -479,7 +528,7 @@ private struct TracksResponse: Decodable { var ok: Bool; var tracks: [OnlineTrac
 private struct TrackUploadResponse: Decodable { var ok: Bool; var track: OnlineTrackSummary; var remoteID: String }
 private struct TrackDownloadResponse: Decodable { var ok: Bool; var track: OnlineDownloadedTrack }
 private struct LeaderboardResponse: Decodable { var ok: Bool; var leaderboard: [OnlineLeaderboardEntry] }
-private struct LapUploadResponse: Decodable { var ok: Bool }
+private struct LapUploadResponse: Decodable { var ok: Bool; var analysis: OnlineLapAnalysis? }
 
 private struct TrackUploadRequest: Encodable {
     var trackName: String
@@ -507,6 +556,10 @@ private struct LapSample: Codable, Hashable {
     var longitude: Double
     var speed: Double
     var color: String
+    var acceleration: Double? = nil
+    var longitudinalAcceleration: Double? = nil
+    var lateralAcceleration: Double? = nil
+    var lineDeviationMeters: Double? = nil
 }
 
 private struct OnlineDownloadedTrack: Decodable {

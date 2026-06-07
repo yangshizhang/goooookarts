@@ -58,6 +58,7 @@ struct ContentView: View {
             HStack(spacing: 16) {
                 metricCard(title: "车速", value: speedText)
                 metricCard(title: "刹车点", value: brakingDistanceText)
+                metricCard(title: "偏离", value: lineDeviationText)
                 metricCard(title: "GPS", value: gpsText)
             }
         }
@@ -127,6 +128,10 @@ struct ContentView: View {
     }
 
     private var gpsText: String { locationManager.fusedPose.map { "±\(Int($0.horizontalAccuracy))m" } ?? "--" }
+    private var lineDeviationText: String {
+        guard let pose = locationManager.fusedPose, let track = trackDataManager.selectedTrack else { return "--" }
+        return "\(Int(GeoConverter.lineDeviationMeters(from: pose.coordinate, along: track.points))) m"
+    }
     private var currentHint: String { nearestTrackPoint()?.color.drivingHint ?? "请导入赛道" }
     private var currentHintColor: Color {
         switch nearestTrackPoint()?.color {

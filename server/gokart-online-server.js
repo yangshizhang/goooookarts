@@ -265,6 +265,126 @@ function sanitizePoint(point) {
   return { latitude, longitude, speed, color };
 }
 
+function clamp(value, min, max) {
+  return Math.max(min, Math.min(max, value));
+}
+
+function finiteNumber(value, fallback = 0) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : fallback;
+}
+
+function sanitizeTelemetrySample(point) {
+  const sample = sanitizePoint(point);
+  const optionalFields = [
+    ['acceleration', -20, 20],
+    ['longitudinalAcceleration', -20, 20],
+    ['lateralAcceleration', -20, 20],
+    ['lineDeviationMeters', 0, 80],
+    ['throttleScore', 0, 100],
+    ['brakeScore', 0, 100]
+  ];
+  for (const [field, min, max] of optionalFields) {
+    const value = Number(point[field]);
+    if (Number.isFinite(value)) sample[field] = Math.round(clamp(value, min, max) * 100) / 100;
+  }
+  return sample;
+}
+
+function sanitizeTelemetrySamples(samples) {
+  if (!Array.isArray(samples)) return [];
+  const clean = [];
+  for (const sample of samples.slice(0, 1000)) {
+    try {
+      clean.push(sanitizeTelemetrySample(sample));
+    } catch {}
+  }
+  return clean;
+}
+
+function pointToLocalMeters(point, origin) {
+  const latScale = Math.PI / 180 * 6371000;
+  const lonScale = latScale * Math.cos(origin.latitude * Math.PI / 180);
+  return {
+    x: (point.longitude - origin.longitude) * lonScale,
+    y: (point.latitude - origin.latitude) * latScale
+  };
+}
+
+function distanceToSegmentMeters(point, start, end) {
+  const a = pointToLocalMeters(start, point);
+  const b = pointToLocalMeters(end, point);
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const lengthSquared = dx * dx + dy * dy;
+  if (lengthSquared <= 0.000001) return haversine(point, start);
+  const t = clamp(-(a.x * dx + a.y * dy) / lengthSquared, 0, 1);
+  const nearestX = a.x + dx * t;
+  const nearestY = a.y + dy * t;
+  return Math.sqrt(nearestX * nearestX + nearestY * nearestY);
+}
+
+function nearestTrackDeviationMeters(point, trackPoints) {
+  if (!Array.isArray(trackPoints) || trackPoints.length < 2) return 0;
+  let best = Infinity;
+  for (let index = 1; index < trackPoints.length; index += 1) {
+    best = Math.min(best, distanceToSegmentMeters(point, trackPoints[index - 1], trackPoints[index]));
+  }
+  return Number.isFinite(best) ? best : 0;
+}
+
+function average(values) {
+  return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : 0;
+}
+
+function analyzeLap(track, samples, context) {
+  const longitudinal = samples
+    .map(sample => Number.isFinite(sample.longitudinalAcceleration) ? sample.longitudinalAcceleration : sample.acceleration)
+    .filter(Number.isFinite);
+  const lateral = samples.map(sample => sample.lateralAcceleration).filter(Number.isFinite);
+  const positive = longitudinal.filter(value => value > 0.2);
+  const negative = longitudinal.filter(value => value < -0.2).map(value => Math.abs(value));
+  const jerk = [];
+  for (let index = 1; index < longitudinal.length; index += 1) jerk.push(Math.abs(longitudinal[index] - longitudinal[index - 1]));
+  const deviations = samples.map(sample => {
+    if (Number.isFinite(sample.lineDeviationMeters)) return sample.lineDeviationMeters;
+    return nearestTrackDeviationMeters(sample, track.points);
+  }).filter(Number.isFinite);
+  const throttleAvg = average(positive);
+  const brakeAvg = average(negative);
+  const throttleMax = positive.length ? Math.max(...positive) : 0;
+  const brakeMax = negative.length ? Math.max(...negative) : 0;
+  const lineDeviationAvg = average(deviations);
+  const lineDeviationMax = deviations.length ? Math.max(...deviations) : 0;
+  const lateralAvg = average(lateral.map(Math.abs));
+  const smoothnessScore = Math.round(clamp(100 - average(jerk) * 22, 0, 100));
+  const throttleScore = Math.round(clamp((throttleAvg * 18) + (throttleMax * 8), 0, 100));
+  const brakeScore = Math.round(clamp((brakeAvg * 20) + (brakeMax * 7), 0, 100));
+  const suggestions = [];
+  if (lineDeviationAvg > 4 || lineDeviationMax > 10) suggestions.push('行车线偏离偏大，优先复盘入弯点和出弯外放位置。');
+  if (brakeMax > 5 || brakeAvg > 2.8) suggestions.push('刹车峰值偏高，建议更早更线性地建立制动力。');
+  if (brakeAvg < 0.7 && finiteNumber(context.speedKph) > 35) suggestions.push('减速特征偏弱，重刹区需要更明确的初段刹车。');
+  if (throttleMax > 4.5 && smoothnessScore < 65) suggestions.push('油门回补较猛，出弯可尝试分段加油减少后段修正。');
+  if (positive.length < longitudinal.length * 0.08 && finiteNumber(context.speedKph) > 25) suggestions.push('有效加速区偏少，确认出弯后是否能更早全油。');
+  if (smoothnessScore < 55) suggestions.push('加速度波动较大，建议保持油门和刹车输入连续。');
+  if (finiteNumber(context.gpsAccuracy) > 10) suggestions.push('GPS 精度偏低，本圈行车线偏离数据仅作参考。');
+  if (!suggestions.length) suggestions.push('本圈输入节奏稳定，下一步可对比排行榜用户的最短行车线。');
+  return {
+    sampleCount: samples.length,
+    throttleScore,
+    throttleAvg: Math.round(throttleAvg * 100) / 100,
+    throttleMax: Math.round(throttleMax * 100) / 100,
+    brakeScore,
+    brakeAvg: Math.round(brakeAvg * 100) / 100,
+    brakeMax: Math.round(brakeMax * 100) / 100,
+    lateralAvg: Math.round(lateralAvg * 100) / 100,
+    lineDeviationAvg: Math.round(lineDeviationAvg * 10) / 10,
+    lineDeviationMax: Math.round(lineDeviationMax * 10) / 10,
+    smoothnessScore,
+    suggestions: suggestions.slice(0, 4)
+  };
+}
+
 function resampleClosedPath(points, targetCount) {
   if (points.length <= 1) return points;
   const distances = [0];
@@ -356,6 +476,13 @@ function leaderboard(trackId) {
       lapTimeMs: lap.lapTimeMs,
       speedKph: lap.speedKph || 0,
       gpsAccuracy: lap.gpsAccuracy || 0,
+      throttleScore: lap.analysis?.throttleScore || 0,
+      brakeScore: lap.analysis?.brakeScore || 0,
+      lineDeviationAvg: lap.analysis?.lineDeviationAvg || 0,
+      lineDeviationMax: lap.analysis?.lineDeviationMax || 0,
+      smoothnessScore: lap.analysis?.smoothnessScore || 0,
+      suggestions: lap.analysis?.suggestions || [],
+      analysis: lap.analysis || null,
       createdAt: lap.createdAt
     }));
 }
@@ -659,6 +786,8 @@ function handleLapObject(body, user) {
   if (!Number.isFinite(lapTimeMs) || lapTimeMs < 5000 || lapTimeMs > 30 * 60 * 1000) return { ok: false, error: '圈速不合法' };
   const speedKph = Number(body.speedKph || 0);
   const gpsAccuracy = Number(body.gpsAccuracy || 0);
+  const samples = sanitizeTelemetrySamples(body.samples);
+  const analysis = analyzeLap(track, samples, { lapTimeMs, speedKph, gpsAccuracy });
   const lap = {
     id: id('lap'),
     trackId: track.id,
@@ -667,14 +796,15 @@ function handleLapObject(body, user) {
     lapTimeMs: Math.round(lapTimeMs),
     speedKph: Number.isFinite(speedKph) ? Math.round(speedKph * 10) / 10 : 0,
     gpsAccuracy: Number.isFinite(gpsAccuracy) ? Math.round(gpsAccuracy * 10) / 10 : 0,
-    sampleCount: Array.isArray(body.samples) ? body.samples.length : 0,
+    sampleCount: samples.length,
+    analysis,
     createdAt: nowISO()
   };
   state.laps.push(lap);
-  try { optimizeTrackWithLap(track, body.samples); } catch {}
+  try { optimizeTrackWithLap(track, samples); } catch {}
   persistLaps();
   persistTracks();
-  return { ok: true, lap, leaderboard: leaderboard(track.id) };
+  return { ok: true, lap, analysis, leaderboard: leaderboard(track.id) };
 }
 
 async function handleAdmin(req, res, url) {

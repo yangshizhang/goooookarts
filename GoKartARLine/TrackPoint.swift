@@ -86,6 +86,8 @@ struct FusedPose {
     var yaw: Double
     var timestamp: Date
     var horizontalAccuracy: Double
+    var longitudinalAcceleration: Double
+    var lateralAcceleration: Double
 }
 
 struct UTMCoordinate: Equatable {
@@ -127,5 +129,23 @@ enum GeoConverter {
 
     static func distanceMeters(from lhs: CLLocationCoordinate2D, to rhs: CLLocationCoordinate2D) -> Double {
         CLLocation(latitude: lhs.latitude, longitude: lhs.longitude).distance(from: CLLocation(latitude: rhs.latitude, longitude: rhs.longitude))
+    }
+
+    static func lineDeviationMeters(from coordinate: CLLocationCoordinate2D, along points: [TrackPoint]) -> Double {
+        guard points.count > 1 else { return 0 }
+        let current = wgs84ToUTM(latitude: coordinate.latitude, longitude: coordinate.longitude)
+        var best = Double.greatestFiniteMagnitude
+        for index in points.indices.dropFirst() {
+            let start = wgs84ToUTM(latitude: points[index - 1].latitude, longitude: points[index - 1].longitude)
+            let end = wgs84ToUTM(latitude: points[index].latitude, longitude: points[index].longitude)
+            let dx = end.easting - start.easting
+            let dy = end.northing - start.northing
+            let lengthSquared = dx * dx + dy * dy
+            let t = lengthSquared > 0 ? max(0, min(1, ((current.easting - start.easting) * dx + (current.northing - start.northing) * dy) / lengthSquared)) : 0
+            let nearestX = start.easting + dx * t
+            let nearestY = start.northing + dy * t
+            best = min(best, hypot(current.easting - nearestX, current.northing - nearestY))
+        }
+        return best.isFinite ? min(best, 80) : 0
     }
 }
