@@ -7,10 +7,16 @@ import android.content.pm.PackageManager;
 import android.graphics.*;
 import android.graphics.drawable.*;
 import android.graphics.SurfaceTexture;
+import android.hardware.display.DisplayManager;
+import android.hardware.display.VirtualDisplay;
 import android.hardware.camera2.*;
 import android.location.*;
+import android.media.*;
+import android.media.projection.*;
 import android.net.Uri;
 import android.os.*;
+import android.text.InputType;
+import android.util.Base64;
 import android.view.*;
 import android.widget.*;
 import org.json.*;
@@ -18,69 +24,148 @@ import java.io.*;
 import java.net.*;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
+import java.util.regex.*;
 
 public class MainActivity extends Activity {
-    private static final int REQ_PERM = 7, REQ_IMPORT = 8;
+    private static final int REQ_PERM = 7, REQ_IMPORT = 8, REQ_IMAGE = 9, REQ_RECORD = 10;
+    private FrameLayout rootView;
     private TextureView cameraPreview;
     private DrivingLineOverlay overlay;
-    private TextView status;
+    private TextView hintText, speedValue, brakeValue, gpsValue;
+    private Button recordButton;
     private CameraDevice cameraDevice;
     private CameraCaptureSession cameraSession;
+    private android.location.LocationManager locationService;
+    private LocationListener locationListener;
+    private Location latestLocation;
     private SharedPreferences prefs;
     private final ArrayList<TrackData> tracks = new ArrayList<>();
     private int selectedTrack = -1;
-    private double renderDistance = 160;
-    private float lineHeight = 0;
+    private double renderDistance = 90;
+    private double lineOpacity = 0.82;
+    private double lineWidth = 0.5;
+    private double lineBrightness = 1.0;
+    private float lineHeight = 3;
     private boolean lowHeatMode = true;
+    private boolean powerSavingMode = false;
+    private boolean disableDepthTest = true;
+    private boolean metricUnits = true;
+    private int gpsAccuracyIndex = 0;
+    private boolean isMainScreen = true;
+    private boolean isRecording = false;
+    private MediaProjectionManager projectionManager;
+    private MediaProjection mediaProjection;
+    private MediaRecorder mediaRecorder;
+    private VirtualDisplay virtualDisplay;
+    private File recordingFile;
+    private Bitmap selectedAIImage;
+    private PointF selectedAIFinishPoint;
+    private ImagePointView aiImageView;
+    private TextView aiMessage;
+    private AlertDialog activeDialog;
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
         prefs = getSharedPreferences("gokart", MODE_PRIVATE);
-        renderDistance = Double.longBitsToDouble(prefs.getLong("renderDistance", Double.doubleToRawLongBits(160)));
-        lineHeight = prefs.getFloat("lineHeight", 0);
+        renderDistance = Double.longBitsToDouble(prefs.getLong("renderDistance", Double.doubleToRawLongBits(90)));
+        lineOpacity = Double.longBitsToDouble(prefs.getLong("lineOpacity", Double.doubleToRawLongBits(0.82)));
+        lineWidth = Double.longBitsToDouble(prefs.getLong("lineWidth", Double.doubleToRawLongBits(0.5)));
+        lineBrightness = Double.longBitsToDouble(prefs.getLong("lineBrightness", Double.doubleToRawLongBits(1.0)));
+        lineHeight = prefs.getFloat("lineHeight", 3);
         lowHeatMode = prefs.getBoolean("lowHeat", true);
+        powerSavingMode = prefs.getBoolean("powerSaving", false);
+        disableDepthTest = prefs.getBoolean("disableDepthTest", true);
+        metricUnits = prefs.getBoolean("metricUnits", true);
+        gpsAccuracyIndex = prefs.getInt("gpsAccuracy", 0);
+        projectionManager = (MediaProjectionManager) getSystemService(MEDIA_PROJECTION_SERVICE);
         loadTracks();
         buildMainUi();
         if (tracks.isEmpty()) loadSampleTrack(); else selectTrack(Math.max(0, prefs.getInt("selectedTrack", 0)));
         requestCameraIfNeeded();
+        startLocationUpdatesIfAllowed();
     }
 
     private void buildMainUi() {
-        FrameLayout root = new FrameLayout(this);
+        isMainScreen = true;
+        rootView = new FrameLayout(this);
+        rootView.setBackgroundColor(Color.BLACK);
         cameraPreview = new TextureView(this);
-        cameraPreview.setOpaque(false);
-        cameraPreview.setAlpha(0.86f);
+        cameraPreview.setOpaque(true);
+        cameraPreview.setAlpha(1f);
         overlay = new DrivingLineOverlay(this);
         overlay.setRenderDistance(renderDistance);
         overlay.setVerticalOffset(lineHeight);
-        root.addView(new LiquidBackdropView(this), new FrameLayout.LayoutParams(-1, -1));
-        root.addView(cameraPreview, new FrameLayout.LayoutParams(-1, -1));
-        root.addView(overlay, new FrameLayout.LayoutParams(-1, -1));
-        status = new TextView(this);
-        status.setTextColor(Color.WHITE);
-        status.setTextSize(17);
-        status.setPadding(dp(20), dp(12), dp(20), dp(12));
-        status.setShadowLayer(dp(6), 0, dp(1), Color.argb(150, 0, 74, 105));
-        status.setBackground(glassPanel(999, 18));
-        status.setElevation(dp(14));
-        FrameLayout.LayoutParams statusParams = new FrameLayout.LayoutParams(-2, -2, Gravity.TOP | Gravity.START);
-        statusParams.setMargins(dp(14), dp(14), dp(14), dp(14));
-        root.addView(status, statusParams);
-        LinearLayout bar = glassContainer(999, 12);
+        overlay.setLineStyle(lineOpacity, lineWidth, lineBrightness);
+        rootView.addView(cameraPreview, new FrameLayout.LayoutParams(-1, -1));
+        rootView.addView(overlay, new FrameLayout.LayoutParams(-1, -1));
+
+        LinearLayout hud = new LinearLayout(this);
+        hud.setOrientation(LinearLayout.VERTICAL);
+        hud.setGravity(Gravity.CENTER);
+        hintText = new TextView(this);
+        hintText.setText("请导入赛道");
+        hintText.setTextColor(Color.WHITE);
+        hintText.setTextSize(34);
+        hintText.setTypeface(Typeface.DEFAULT_BOLD);
+        hintText.setGravity(Gravity.CENTER);
+        hintText.setShadowLayer(dp(6), 0, dp(1), Color.argb(180, 0, 0, 0));
+        hud.addView(hintText, new LinearLayout.LayoutParams(-2, -2));
+        LinearLayout metrics = new LinearLayout(this);
+        metrics.setGravity(Gravity.CENTER);
+        metrics.setPadding(0, dp(8), 0, 0);
+        speedValue = addMetricCard(metrics, "车速");
+        brakeValue = addMetricCard(metrics, "刹车点");
+        gpsValue = addMetricCard(metrics, "GPS");
+        hud.addView(metrics, new LinearLayout.LayoutParams(-2, -2));
+        FrameLayout.LayoutParams hudParams = new FrameLayout.LayoutParams(-2, -2, Gravity.TOP | Gravity.CENTER_HORIZONTAL);
+        hudParams.setMargins(dp(14), dp(14), dp(14), dp(14));
+        rootView.addView(hud, hudParams);
+
+        LinearLayout bar = new LinearLayout(this);
         bar.setGravity(Gravity.CENTER);
-        bar.setPadding(dp(10), dp(8), dp(10), dp(8));
-        addButton(bar, "Import", v -> importTrack());
-        addButton(bar, "Tracks", v -> showTrackList());
-        addButton(bar, "Map Draw", v -> showMapDrawer());
-        addButton(bar, "AI", v -> showAISettings());
-        addButton(bar, "Settings", v -> showSettings());
+        bar.setPadding(0, 0, 0, 0);
+        addButton(bar, "导入", v -> importTrack());
+        addButton(bar, "赛道", v -> showTrackList());
+        addButton(bar, "校准", v -> manualCalibrate());
+        recordButton = addButton(bar, isRecording ? "停止" : "录屏", v -> toggleRecording());
+        addButton(bar, "截图", v -> captureStillImage());
+        addButton(bar, "设置", v -> showSettings());
         FrameLayout.LayoutParams barParams = new FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL);
         barParams.setMargins(dp(18), dp(18), dp(18), dp(18));
-        root.addView(bar, barParams);
-        setContentView(root);
+        rootView.addView(bar, barParams);
+        setContentView(rootView);
+        updateHud();
     }
 
-    private void addButton(LinearLayout parent, String text, View.OnClickListener listener) {
+    private TextView addMetricCard(LinearLayout parent, String title) {
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.VERTICAL);
+        card.setGravity(Gravity.CENTER);
+        card.setPadding(dp(14), dp(8), dp(14), dp(8));
+        GradientDrawable bg = new GradientDrawable();
+        bg.setColor(Color.argb(140, 0, 0, 0));
+        bg.setCornerRadius(dp(14));
+        card.setBackground(bg);
+        TextView label = new TextView(this);
+        label.setText(title);
+        label.setTextColor(Color.argb(184, 255, 255, 255));
+        label.setTextSize(12);
+        label.setGravity(Gravity.CENTER);
+        TextView value = new TextView(this);
+        value.setText("--");
+        value.setTextColor(Color.WHITE);
+        value.setTextSize(18);
+        value.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
+        value.setGravity(Gravity.CENTER);
+        card.addView(label);
+        card.addView(value);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-2, -2);
+        lp.setMargins(dp(8), 0, dp(8), 0);
+        parent.addView(card, lp);
+        return value;
+    }
+
+    private Button addButton(LinearLayout parent, String text, View.OnClickListener listener) {
         Button b = new Button(this);
         b.setText(text);
         applyGlassButton(b);
@@ -88,6 +173,7 @@ public class MainActivity extends Activity {
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-2, dp(56));
         lp.setMargins(dp(6), 0, dp(6), 0);
         parent.addView(b, lp);
+        return b;
     }
 
 
@@ -119,6 +205,7 @@ public class MainActivity extends Activity {
     }
 
     private AlertDialog showGlassDialog(AlertDialog dialog) {
+        pauseCamera();
         dialog.setOnShowListener(d -> {
             Window window = dialog.getWindow();
             if (window != null) {
@@ -135,7 +222,9 @@ public class MainActivity extends Activity {
             if (negative != null) applyGlassButton(negative);
             if (neutral != null) applyGlassButton(neutral);
         });
+        dialog.setOnDismissListener(d -> { activeDialog = null; resumeCameraIfMain(); });
         dialog.show();
+        activeDialog = dialog;
         return dialog;
     }
 
@@ -155,28 +244,88 @@ public class MainActivity extends Activity {
     @Override public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grants) {
         super.onRequestPermissionsResult(requestCode, permissions, grants);
         if (requestCode == REQ_PERM && grants.length > 0 && grants[0] == PackageManager.PERMISSION_GRANTED) startCameraWhenReady();
-        else showNoCameraBackground("No camera permission: preview mode");
+        else showNoCameraBackground("无相机权限：预览模式");
+        startLocationUpdatesIfAllowed();
     }
 
     private void showNoCameraBackground(String message) {
         cameraPreview.setBackgroundColor(Color.rgb(18, 18, 18));
-        setStatus(message);
+        toast(message);
+        updateHud();
     }
 
     private void setStatus(String message) {
-        status.setText(message + "\nLine " + (int) renderDistance + "m | Height " + (int) lineHeight + "px | " + (lowHeatMode ? "720p" : "1080p"));
+        toast(message);
+        updateHud();
+    }
+
+    private void updateHud() {
+        if (hintText == null || speedValue == null || brakeValue == null || gpsValue == null) return;
+        TrackPoint nearest = nearestTrackPoint();
+        String hint = selectedTrack >= 0 ? drivingHint(nearest == null ? "green" : nearest.color) : "请导入赛道";
+        hintText.setText(hint);
+        hintText.setTextColor(colorForHint(nearest == null ? "green" : nearest.color));
+        double speed = latestLocation != null && latestLocation.hasSpeed() ? Math.max(latestLocation.getSpeed(), 0) : 0;
+        speedValue.setText(metricUnits ? ((int) (speed * 3.6)) + " km/h" : ((int) (speed * 2.23694)) + " mph");
+        brakeValue.setText(brakingDistanceText());
+        gpsValue.setText(latestLocation != null && latestLocation.hasAccuracy() ? "±" + (int) latestLocation.getAccuracy() + "m" : "--");
+    }
+
+    private String brakingDistanceText() {
+        if (latestLocation == null || selectedTrack < 0 || selectedTrack >= tracks.size()) return "--";
+        double best = Double.MAX_VALUE;
+        TrackPoint current = new TrackPoint(latestLocation.getLatitude(), latestLocation.getLongitude(), 0, "green");
+        for (TrackPoint point : tracks.get(selectedTrack).points) {
+            if (!"red".equals(point.color)) continue;
+            best = Math.min(best, distanceMeters(current, point));
+        }
+        return best == Double.MAX_VALUE ? "--" : ((int) best) + " m";
+    }
+
+    private TrackPoint nearestTrackPoint() {
+        if (selectedTrack < 0 || selectedTrack >= tracks.size() || tracks.get(selectedTrack).points.isEmpty()) return null;
+        if (latestLocation == null) return tracks.get(selectedTrack).points.get(0);
+        TrackPoint current = new TrackPoint(latestLocation.getLatitude(), latestLocation.getLongitude(), 0, "green");
+        TrackPoint nearest = null;
+        double best = Double.MAX_VALUE;
+        for (TrackPoint point : tracks.get(selectedTrack).points) {
+            double distance = distanceMeters(current, point);
+            if (distance < best) { best = distance; nearest = point; }
+        }
+        return nearest;
+    }
+
+    private String drivingHint(String color) {
+        if ("red".equals(color)) return "刹车";
+        if ("orange".equals(color)) return "松油";
+        return "全油门";
+    }
+
+    private int colorForHint(String color) {
+        if ("red".equals(color)) return Color.rgb(255, 24, 16);
+        if ("orange".equals(color)) return Color.rgb(255, 156, 0);
+        return Color.rgb(0, 255, 70);
     }
 
     private void importTrack() {
-        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("application/json");
+        pauseCamera();
+        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("*/*");
         startActivityForResult(intent, REQ_IMPORT);
     }
 
     @Override protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
         if (requestCode == REQ_IMPORT && resultCode == RESULT_OK && data != null) {
-            try { addTrack(parseTrack(readUri(data.getData()), "Imported Track")); toast("Import OK"); }
-            catch (Exception e) { toast("Import failed: " + e.getMessage()); }
+            try { addTrack(parseImportedTrack(readUri(data.getData()), "导入赛道")); toast("导入成功"); }
+            catch (Exception e) { toast("导入失败：" + e.getMessage()); }
+            resumeCameraIfMain();
+        } else if (requestCode == REQ_IMPORT) {
+            resumeCameraIfMain();
+        } else if (requestCode == REQ_IMAGE && resultCode == RESULT_OK && data != null) {
+            loadAIImage(data.getData());
+        } else if (requestCode == REQ_RECORD) {
+            if (resultCode == RESULT_OK && data != null) startScreenRecording(resultCode, data);
+            else toast("录屏授权已取消");
         }
     }
 
@@ -184,7 +333,23 @@ public class MainActivity extends Activity {
     private String readAsset(String name) throws Exception { try (InputStream in = getAssets().open(name)) { return readStream(in); } }
     private String readStream(InputStream in) throws Exception { ByteArrayOutputStream out = new ByteArrayOutputStream(); byte[] b = new byte[8192]; int n; while ((n = in.read(b)) != -1) out.write(b, 0, n); return out.toString(StandardCharsets.UTF_8.name()); }
 
-    private void loadSampleTrack() { try { addTrack(parseTrack(readAsset("SampleTrack.json"), "Sample Track")); } catch (Exception e) { toast("Sample failed: " + e.getMessage()); } }
+    private void loadSampleTrack() { try { addTrack(parseTrack(readAsset("SampleTrack.json"), "示例赛道")); } catch (Exception e) { toast("示例赛道读取失败：" + e.getMessage()); } }
+
+    private TrackData parseImportedTrack(String raw, String fallbackName) throws Exception {
+        String trimmed = raw.trim();
+        if (trimmed.startsWith("<")) return parseGpxTrack(trimmed, fallbackName);
+        return parseTrack(trimmed, fallbackName);
+    }
+
+    private TrackData parseGpxTrack(String xml, String fallbackName) throws Exception {
+        TrackData t = new TrackData();
+        t.name = fallbackName;
+        Matcher matcher = Pattern.compile("<(?:trkpt|rtept)[^>]*lat=\"([^\"]+)\"[^>]*lon=\"([^\"]+)\"", Pattern.CASE_INSENSITIVE).matcher(xml);
+        while (matcher.find()) t.points.add(new TrackPoint(Double.parseDouble(matcher.group(1)), Double.parseDouble(matcher.group(2)), 50, "green"));
+        if (t.points.size() < 2) throw new IOException("GPX没有有效轨迹点");
+        t.length = computeLength(t.points);
+        return t;
+    }
 
     private TrackData parseTrack(String json, String fallbackName) throws Exception {
         JSONObject obj = new JSONObject(json);
@@ -202,104 +367,702 @@ public class MainActivity extends Activity {
     }
 
     private void addTrack(TrackData track) { tracks.add(track); selectedTrack = tracks.size() - 1; saveTracks(); selectTrack(selectedTrack); }
-    private void selectTrack(int index) { if (index < 0 || index >= tracks.size()) return; selectedTrack = index; overlay.setTrack(tracks.get(index).points); prefs.edit().putInt("selectedTrack", index).apply(); setStatus("Track: " + tracks.get(index).name + " | " + tracks.get(index).points.size() + " pts"); }
+    private void selectTrack(int index) { if (index < 0 || index >= tracks.size()) return; selectedTrack = index; overlay.setTrack(tracks.get(index).points); prefs.edit().putInt("selectedTrack", index).apply(); updateHud(); }
 
-    private void showTrackList() {
-        String[] names = new String[tracks.size()];
-        for (int i = 0; i < tracks.size(); i++) names[i] = tracks.get(i).name + " | " + tracks.get(i).points.size() + " pts";
-        AlertDialog dialog = new AlertDialog.Builder(this).setTitle("Track Manager").setItems(names, (d, which) -> selectTrack(which)).setPositiveButton("Rename", (d, w) -> renameSelected()).setNegativeButton("Delete", (d, w) -> deleteSelected()).setNeutralButton("Close", null).create();
-        showGlassDialog(dialog);
+    private void startLocationUpdatesIfAllowed() {
+        if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) return;
+        if (locationService == null) locationService = (android.location.LocationManager) getSystemService(LOCATION_SERVICE);
+        if (locationListener == null) {
+            locationListener = new LocationListener() {
+                @Override public void onLocationChanged(Location location) { latestLocation = location; updateHud(); }
+                @Override public void onStatusChanged(String provider, int status, Bundle extras) {}
+                @Override public void onProviderEnabled(String provider) {}
+                @Override public void onProviderDisabled(String provider) {}
+            };
+        }
+        try {
+            locationService.removeUpdates(locationListener);
+            String provider = locationService.isProviderEnabled(android.location.LocationManager.GPS_PROVIDER) ? android.location.LocationManager.GPS_PROVIDER : android.location.LocationManager.NETWORK_PROVIDER;
+            long interval = gpsAccuracyIndex == 0 ? 250 : gpsAccuracyIndex == 1 ? 500 : 1500;
+            float distance = gpsAccuracyIndex == 2 ? 10f : 0f;
+            locationService.requestLocationUpdates(provider, interval, distance, locationListener);
+            latestLocation = locationService.getLastKnownLocation(provider);
+            updateHud();
+        } catch (Exception e) { toast("定位失败：" + e.getMessage()); }
     }
 
-    private void renameSelected() { if (selectedTrack < 0) return; EditText input = new EditText(this); input.setText(tracks.get(selectedTrack).name); showGlassDialog(new AlertDialog.Builder(this).setTitle("Rename").setView(input).setPositiveButton("Save", (d, w) -> { tracks.get(selectedTrack).name = input.getText().toString(); saveTracks(); selectTrack(selectedTrack); }).create()); }
-    private void deleteSelected() { if (selectedTrack < 0) return; tracks.remove(selectedTrack); selectedTrack = Math.min(selectedTrack, tracks.size() - 1); saveTracks(); if (selectedTrack >= 0) selectTrack(selectedTrack); else overlay.setTrack(new ArrayList<>()); }
+    private void pauseCamera() {
+        try { if (cameraSession != null) cameraSession.close(); } catch (Exception ignored) {}
+        try { if (cameraDevice != null) cameraDevice.close(); } catch (Exception ignored) {}
+        cameraSession = null;
+        cameraDevice = null;
+    }
+
+    private void resumeCameraIfMain() {
+        if (isMainScreen && cameraPreview != null) startCameraWhenReady();
+    }
+
+    private void manualCalibrate() {
+        if (selectedTrack < 0 || selectedTrack >= tracks.size()) { toast("没有可用于校准的赛道"); return; }
+        if (latestLocation != null) toast("已按当前位置手动校准");
+        else toast("已按赛道起点校准");
+        updateHud();
+    }
+
+    private void captureStillImage() {
+        if (rootView == null || rootView.getWidth() <= 0 || rootView.getHeight() <= 0) return;
+        try {
+            Bitmap bitmap = Bitmap.createBitmap(rootView.getWidth(), rootView.getHeight(), Bitmap.Config.ARGB_8888);
+            Canvas canvas = new Canvas(bitmap);
+            Bitmap camera = cameraPreview != null ? cameraPreview.getBitmap() : null;
+            if (camera != null) canvas.drawBitmap(camera, null, new Rect(0, 0, bitmap.getWidth(), bitmap.getHeight()), null);
+            overlay.draw(canvas);
+            File dir = getExternalFilesDir(Environment.DIRECTORY_PICTURES);
+            if (dir != null && !dir.exists()) dir.mkdirs();
+            File file = new File(dir, "GoKartARLine-" + System.currentTimeMillis() + ".png");
+            try (FileOutputStream out = new FileOutputStream(file)) { bitmap.compress(Bitmap.CompressFormat.PNG, 100, out); }
+            MediaScannerConnection.scanFile(this, new String[]{file.getAbsolutePath()}, new String[]{"image/png"}, null);
+            toast("截图已保存：" + file.getName());
+        } catch (Exception e) { toast("截图失败：" + e.getMessage()); }
+    }
+
+    private void toggleRecording() {
+        if (isRecording) stopScreenRecordingIfNeeded();
+        else startActivityForResult(projectionManager.createScreenCaptureIntent(), REQ_RECORD);
+    }
+
+    private void startScreenRecording(int resultCode, Intent data) {
+        try {
+            android.util.DisplayMetrics metrics = getResources().getDisplayMetrics();
+            int width = Math.max(1280, metrics.widthPixels);
+            int height = Math.max(720, metrics.heightPixels);
+            File dir = getExternalFilesDir(Environment.DIRECTORY_MOVIES);
+            if (dir != null && !dir.exists()) dir.mkdirs();
+            recordingFile = new File(dir, "GoKartARLine-" + System.currentTimeMillis() + ".mp4");
+            mediaRecorder = new MediaRecorder();
+            mediaRecorder.setVideoSource(MediaRecorder.VideoSource.SURFACE);
+            mediaRecorder.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4);
+            mediaRecorder.setOutputFile(recordingFile.getAbsolutePath());
+            mediaRecorder.setVideoEncoder(MediaRecorder.VideoEncoder.H264);
+            mediaRecorder.setVideoSize(width, height);
+            mediaRecorder.setVideoFrameRate(powerSavingMode ? 30 : 60);
+            mediaRecorder.setVideoEncodingBitRate(10_000_000);
+            mediaRecorder.prepare();
+            mediaProjection = projectionManager.getMediaProjection(resultCode, data);
+            virtualDisplay = mediaProjection.createVirtualDisplay("GoKartARLineRecording", width, height, metrics.densityDpi, DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR, mediaRecorder.getSurface(), null, null);
+            mediaRecorder.start();
+            isRecording = true;
+            if (recordButton != null) recordButton.setText("停止");
+            toast("开始录屏");
+        } catch (Exception e) {
+            stopScreenRecordingIfNeeded();
+            toast("开始录屏失败：" + e.getMessage());
+        }
+    }
+
+    private void stopScreenRecordingIfNeeded() {
+        if (!isRecording && mediaRecorder == null && mediaProjection == null) return;
+        try { if (mediaRecorder != null) mediaRecorder.stop(); } catch (Exception ignored) {}
+        try { if (mediaRecorder != null) mediaRecorder.release(); } catch (Exception ignored) {}
+        try { if (virtualDisplay != null) virtualDisplay.release(); } catch (Exception ignored) {}
+        try { if (mediaProjection != null) mediaProjection.stop(); } catch (Exception ignored) {}
+        mediaRecorder = null;
+        virtualDisplay = null;
+        mediaProjection = null;
+        isRecording = false;
+        if (recordButton != null) recordButton.setText("录屏");
+        if (recordingFile != null) {
+            MediaScannerConnection.scanFile(this, new String[]{recordingFile.getAbsolutePath()}, new String[]{"video/mp4"}, null);
+            toast("录屏已保存：" + recordingFile.getName());
+        }
+    }
+
+    private void showTrackList() {
+        LinearLayout box = glassDialogBox();
+        LinearLayout tools = new LinearLayout(this);
+        tools.setGravity(Gravity.CENTER);
+        addButton(tools, "AI生成", v -> { closeOpenDialogs(); showAITrackGenerator(); });
+        addButton(tools, "地图绘制", v -> { closeOpenDialogs(); showMapDrawer(); });
+        box.addView(tools, new LinearLayout.LayoutParams(-1, dp(62)));
+        ScrollView scroll = new ScrollView(this);
+        LinearLayout rows = new LinearLayout(this);
+        rows.setOrientation(LinearLayout.VERTICAL);
+        if (tracks.isEmpty()) rows.addView(label("暂无赛道"));
+        for (int i = 0; i < tracks.size(); i++) rows.addView(trackRow(i));
+        scroll.addView(rows);
+        box.addView(scroll, new LinearLayout.LayoutParams(-1, dp(360)));
+        showGlassDialog(new AlertDialog.Builder(this).setTitle("已导入赛道").setView(box).setPositiveButton("完成", null).create());
+    }
+
+    private void closeOpenDialogs() {
+        if (activeDialog != null) activeDialog.dismiss();
+        activeDialog = null;
+    }
+
+    private View trackRow(int index) {
+        TrackData track = tracks.get(index);
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(dp(12), dp(8), dp(12), dp(8));
+        row.setBackground(glassPanel(14, selectedTrack == index ? 28 : 12));
+        LinearLayout texts = new LinearLayout(this);
+        texts.setOrientation(LinearLayout.VERTICAL);
+        TextView name = label(track.name);
+        name.setTypeface(Typeface.DEFAULT_BOLD);
+        TextView meta = label((int) track.length + "m · " + track.cornerCount + "弯 · " + track.points.size() + "点");
+        meta.setTextSize(13);
+        meta.setTextColor(Color.argb(170, 255, 255, 255));
+        texts.addView(name);
+        texts.addView(meta);
+        row.addView(texts, new LinearLayout.LayoutParams(0, -2, 1));
+        Button select = addButton(row, "选择", v -> { selectTrack(index); showMapCalibration(index); });
+        Button rename = addButton(row, "重命名", v -> renameTrack(index));
+        Button delete = addButton(row, "删除", v -> deleteTrack(index));
+        select.setMinWidth(dp(86));
+        rename.setMinWidth(dp(96));
+        delete.setMinWidth(dp(86));
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2);
+        lp.setMargins(0, dp(6), 0, dp(6));
+        row.setLayoutParams(lp);
+        return row;
+    }
+
+    private void renameSelected() { if (selectedTrack >= 0) renameTrack(selectedTrack); }
+    private void renameTrack(int index) { if (index < 0 || index >= tracks.size()) return; EditText input = new EditText(this); input.setText(tracks.get(index).name); input.setTextColor(Color.WHITE); input.setHintTextColor(0xAAFFFFFF); input.setBackground(glassPanel(14, 18)); showGlassDialog(new AlertDialog.Builder(this).setTitle("重命名赛道").setView(input).setPositiveButton("保存", (d, w) -> { tracks.get(index).name = input.getText().toString().trim(); saveTracks(); selectTrack(index); }).setNegativeButton("取消", null).create()); }
+    private void deleteSelected() { if (selectedTrack >= 0) deleteTrack(selectedTrack); }
+    private void deleteTrack(int index) { if (index < 0 || index >= tracks.size()) return; tracks.remove(index); selectedTrack = Math.min(index, tracks.size() - 1); saveTracks(); if (selectedTrack >= 0) selectTrack(selectedTrack); else overlay.setTrack(new ArrayList<>()); updateHud(); toast("已删除"); }
+
+    private void showMapCalibration(int index) {
+        if (index < 0 || index >= tracks.size()) return;
+        LinearLayout box = glassDialogBox();
+        TextView help = label("在地图上点击你当前所在位置；拖动红色方向箭头或使用滑块校准车头方向。");
+        help.setTextColor(Color.argb(190, 255, 255, 255));
+        box.addView(help);
+        CalibrationCanvas canvas = new CalibrationCanvas(this, tracks.get(index));
+        box.addView(canvas, new LinearLayout.LayoutParams(-1, dp(340)));
+        TextView direction = label("方向 0°");
+        box.addView(direction);
+        SeekBar heading = new SeekBar(this);
+        heading.setMax(359);
+        heading.setBackground(glassPanel(14, 14));
+        heading.setPadding(dp(10), dp(6), dp(10), dp(6));
+        heading.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) { canvas.headingDegrees = progress; direction.setText("方向 " + progress + "°"); canvas.invalidate(); }
+            public void onStartTrackingTouch(SeekBar seekBar) {}
+            public void onStopTrackingTouch(SeekBar seekBar) {}
+        });
+        box.addView(heading, new LinearLayout.LayoutParams(-1, dp(48)));
+        TextView point = label("当前位置点：#1 / " + tracks.get(index).points.size());
+        box.addView(point);
+        showGlassDialog(new AlertDialog.Builder(this).setTitle("校准地图").setView(box).setPositiveButton("加载赛道并应用校准", (d, w) -> { selectTrack(index); toast("已按地图选择校准位置和方向"); }).setNegativeButton("取消", null).create());
+    }
 
     private void showSettings() {
         LinearLayout box = glassDialogBox();
-        SeekBar distance = new SeekBar(this); distance.setMax(170); distance.setProgress((int) renderDistance - 30); box.addView(label("Render distance 30-200m")); box.addView(distance);
-        SeekBar height = new SeekBar(this); height.setMax(160); height.setProgress((int) (lineHeight + 80)); box.addView(label("Line height -80 to 80px")); box.addView(height);
-        CheckBox low = new CheckBox(this); low.setText("720p low heat mode (off = 1080p)"); low.setChecked(lowHeatMode); box.addView(low);
-        showGlassDialog(new AlertDialog.Builder(this).setTitle("Settings").setView(box).setPositiveButton("Save", (d, w) -> { renderDistance = 30 + distance.getProgress(); lineHeight = height.getProgress() - 80; lowHeatMode = low.isChecked(); overlay.setRenderDistance(renderDistance); overlay.setVerticalOffset(lineHeight); prefs.edit().putLong("renderDistance", Double.doubleToRawLongBits(renderDistance)).putFloat("lineHeight", lineHeight).putBoolean("lowHeat", lowHeatMode).apply(); restartCamera(); setStatus("Settings saved"); }).create());
+        box.addView(sectionLabel("行车线样式"));
+        SeekBar opacity = addSlider(box, "透明度", 15, 100, (int) Math.round(lineOpacity * 100));
+        SeekBar width = addSlider(box, "宽度", 20, 120, (int) Math.round(lineWidth * 100));
+        SeekBar height = addSlider(box, "离地高度", 0, 35, (int) Math.round(lineHeight));
+        SeekBar distance = addSlider(box, "前方显示距离", 30, 200, (int) renderDistance);
+        SeekBar bright = addSlider(box, "亮度", 20, 100, (int) Math.round(lineBrightness * 100));
+        CheckBox depth = addCheckBox(box, "禁用深度测试（提升帧率）", disableDepthTest);
+        box.addView(sectionLabel("传感器与性能"));
+        RadioGroup gps = radioGroup(new String[]{"导航级", "最佳", "10米"}, gpsAccuracyIndex);
+        box.addView(label("GPS精度"));
+        box.addView(gps);
+        RadioGroup resolution = radioGroup(new String[]{"720p（低发热）", "1080p（更清晰）"}, lowHeatMode ? 0 : 1);
+        box.addView(label("相机分辨率"));
+        box.addView(resolution);
+        CheckBox power = addCheckBox(box, "省电模式（AR 30fps）", powerSavingMode);
+        box.addView(sectionLabel("单位"));
+        CheckBox metric = addCheckBox(box, "公制单位", metricUnits);
+        box.addView(sectionLabel("安全"));
+        TextView safety = label("请只在封闭赛道使用。手机必须固定牢靠，AR提示不能替代驾驶判断。");
+        safety.setTextColor(Color.argb(180, 255, 255, 255));
+        box.addView(safety);
+        showGlassDialog(new AlertDialog.Builder(this).setTitle("设置").setView(box).setPositiveButton("完成", (d, w) -> {
+            lineOpacity = (15 + opacity.getProgress()) / 100.0;
+            lineWidth = (20 + width.getProgress()) / 100.0;
+            lineHeight = height.getProgress();
+            renderDistance = 30 + distance.getProgress();
+            lineBrightness = (20 + bright.getProgress()) / 100.0;
+            disableDepthTest = depth.isChecked();
+            gpsAccuracyIndex = Math.max(0, gps.indexOfChild(gps.findViewById(gps.getCheckedRadioButtonId())));
+            lowHeatMode = resolution.indexOfChild(resolution.findViewById(resolution.getCheckedRadioButtonId())) == 0;
+            powerSavingMode = power.isChecked();
+            metricUnits = metric.isChecked();
+            overlay.setRenderDistance(renderDistance);
+            overlay.setVerticalOffset(lineHeight);
+            overlay.setLineStyle(lineOpacity, lineWidth, lineBrightness);
+            prefs.edit()
+                    .putLong("renderDistance", Double.doubleToRawLongBits(renderDistance))
+                    .putLong("lineOpacity", Double.doubleToRawLongBits(lineOpacity))
+                    .putLong("lineWidth", Double.doubleToRawLongBits(lineWidth))
+                    .putLong("lineBrightness", Double.doubleToRawLongBits(lineBrightness))
+                    .putFloat("lineHeight", lineHeight)
+                    .putBoolean("lowHeat", lowHeatMode)
+                    .putBoolean("powerSaving", powerSavingMode)
+                    .putBoolean("disableDepthTest", disableDepthTest)
+                    .putBoolean("metricUnits", metricUnits)
+                    .putInt("gpsAccuracy", gpsAccuracyIndex)
+                    .apply();
+            startLocationUpdatesIfAllowed();
+            restartCamera();
+            updateHud();
+        }).create());
     }
     private TextView label(String s) { TextView v = new TextView(this); v.setText(s); v.setTextSize(16); v.setTextColor(Color.WHITE); v.setPadding(0, dp(10), 0, dp(4)); return v; }
+
+    private TextView sectionLabel(String s) { TextView v = label(s); v.setTypeface(Typeface.DEFAULT_BOLD); v.setTextSize(18); return v; }
+
+    private SeekBar addSlider(LinearLayout box, String title, int min, int max, int value) {
+        box.addView(label(title));
+        SeekBar bar = new SeekBar(this);
+        bar.setMax(max - min);
+        bar.setProgress(Math.max(0, Math.min(max - min, value - min)));
+        bar.setPadding(dp(10), dp(6), dp(10), dp(6));
+        bar.setBackground(glassPanel(14, 14));
+        box.addView(bar, new LinearLayout.LayoutParams(-1, dp(46)));
+        return bar;
+    }
+
+    private CheckBox addCheckBox(LinearLayout box, String text, boolean checked) {
+        CheckBox check = new CheckBox(this);
+        check.setText(text);
+        check.setTextColor(Color.WHITE);
+        check.setTextSize(16);
+        check.setChecked(checked);
+        check.setBackground(glassPanel(14, 14));
+        check.setPadding(dp(10), dp(6), dp(10), dp(6));
+        box.addView(check, new LinearLayout.LayoutParams(-1, dp(48)));
+        return check;
+    }
+
+    private RadioGroup radioGroup(String[] labels, int checkedIndex) {
+        RadioGroup group = new RadioGroup(this);
+        group.setOrientation(RadioGroup.HORIZONTAL);
+        group.setBackground(glassPanel(14, 14));
+        group.setPadding(dp(8), dp(4), dp(8), dp(4));
+        for (int i = 0; i < labels.length; i++) {
+            RadioButton item = new RadioButton(this);
+            item.setText(labels[i]);
+            item.setTextColor(Color.WHITE);
+            item.setTextSize(15);
+            item.setId(View.generateViewId());
+            group.addView(item, new RadioGroup.LayoutParams(0, dp(46), 1));
+            if (i == checkedIndex) group.check(item.getId());
+        }
+        return group;
+    }
 
     private void showAISettings() {
         LinearLayout box = glassDialogBox();
         EditText key = new EditText(this); key.setHint("AI API Key"); key.setText(prefs.getString("apiKey", ""));
-        EditText base = new EditText(this); base.setHint("Base URL"); base.setText(prefs.getString("baseUrl", "https://api.openai.com/v1"));
-        EditText model = new EditText(this); model.setHint("Model"); model.setText(prefs.getString("model", "gpt-4.1-mini"));
+        EditText base = new EditText(this); base.setHint("Base URL"); base.setText(prefs.getString("baseUrl", "https://api.tutujin.com/v1"));
+        EditText model = new EditText(this); model.setHint("Model"); model.setText(prefs.getString("model", "claude-3-5-sonnet-20240620"));
         box.addView(key); box.addView(base); box.addView(model);
-        showGlassDialog(new AlertDialog.Builder(this).setTitle("AI Settings").setView(box).setPositiveButton("Save", (d, w) -> prefs.edit().putString("apiKey", key.getText().toString()).putString("baseUrl", base.getText().toString()).putString("model", model.getText().toString()).apply()).create());
+        showGlassDialog(new AlertDialog.Builder(this).setTitle("AI设置").setView(box).setPositiveButton("保存", (d, w) -> prefs.edit().putString("apiKey", key.getText().toString()).putString("baseUrl", base.getText().toString()).putString("model", model.getText().toString()).apply()).create());
     }
 
-    private void showMapDrawer() { setContentView(new MapDrawerView(this)); }
-    private void backHome() { buildMainUi(); if (selectedTrack >= 0) selectTrack(selectedTrack); requestCameraIfNeeded(); }
+    private void showAITrackGenerator() {
+        isMainScreen = false;
+        pauseCamera();
+        selectedAIImage = null;
+        selectedAIFinishPoint = null;
+        LinearLayout root = new LinearLayout(this);
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setPadding(dp(14), dp(14), dp(14), dp(14));
+        root.setBackgroundColor(Color.BLACK);
+        LinearLayout header = new LinearLayout(this);
+        header.setGravity(Gravity.CENTER_VERTICAL);
+        TextView title = label("AI生成赛道");
+        title.setTypeface(Typeface.DEFAULT_BOLD);
+        title.setTextSize(22);
+        header.addView(title, new LinearLayout.LayoutParams(0, -2, 1));
+        addButton(header, "关闭", v -> backHome());
+        root.addView(header, new LinearLayout.LayoutParams(-1, dp(62)));
+        Button photo = new Button(this);
+        photo.setText("选择赛道照片");
+        applyGlassButton(photo);
+        photo.setOnClickListener(v -> pickAIImage());
+        root.addView(photo, new LinearLayout.LayoutParams(-1, dp(56)));
+        EditText key = aiField("AI接口Key（保存在本机）", prefs.getString("apiKey", ""), true);
+        EditText base = aiField("Base URL", prefs.getString("baseUrl", "https://api.tutujin.com/v1"), false);
+        EditText model = aiField("Model ID", prefs.getString("model", "claude-3-5-sonnet-20240620"), false);
+        root.addView(key);
+        root.addView(base);
+        root.addView(model);
+        aiImageView = new ImagePointView(this);
+        LinearLayout.LayoutParams imageLp = new LinearLayout.LayoutParams(-1, 0, 1);
+        imageLp.setMargins(0, dp(12), 0, dp(8));
+        root.addView(aiImageView, imageLp);
+        aiMessage = label("选择赛道俯视图，然后点击图片上的起终点位置。");
+        aiMessage.setTextColor(Color.argb(190, 255, 255, 255));
+        root.addView(aiMessage);
+        Button generate = new Button(this);
+        generate.setText("AI生成并导入赛道");
+        applyGlassButton(generate);
+        generate.setOnClickListener(v -> {
+            prefs.edit().putString("apiKey", key.getText().toString()).putString("baseUrl", base.getText().toString()).putString("model", model.getText().toString()).apply();
+            generateAITrack();
+        });
+        root.addView(generate, new LinearLayout.LayoutParams(-1, dp(58)));
+        setContentView(root);
+    }
+
+    private EditText aiField(String hint, String value, boolean secure) {
+        EditText input = new EditText(this);
+        input.setHint(hint);
+        input.setText(value);
+        input.setSingleLine(true);
+        input.setTextColor(Color.WHITE);
+        input.setHintTextColor(0xAAFFFFFF);
+        input.setBackground(glassPanel(12, 14));
+        input.setPadding(dp(12), 0, dp(12), 0);
+        if (secure) input.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, dp(54));
+        lp.setMargins(0, dp(6), 0, 0);
+        input.setLayoutParams(lp);
+        return input;
+    }
+
+    private void pickAIImage() {
+        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("image/*");
+        startActivityForResult(intent, REQ_IMAGE);
+    }
+
+    private void loadAIImage(Uri uri) {
+        try (InputStream in = getContentResolver().openInputStream(uri)) {
+            selectedAIImage = BitmapFactory.decodeStream(in);
+            selectedAIFinishPoint = null;
+            if (aiImageView != null) aiImageView.setImage(selectedAIImage);
+            if (aiMessage != null) aiMessage.setText("照片已选择。请点击图片上的起终点位置。");
+        } catch (Exception e) { toast("照片读取失败：" + e.getMessage()); }
+    }
+
+    private void generateAITrack() {
+        if (selectedAIImage == null || selectedAIFinishPoint == null) { toast("请先选择照片并点击起终点"); return; }
+        if (prefs.getString("apiKey", "").trim().isEmpty()) { toast("请先输入AI接口Key"); return; }
+        if (aiMessage != null) aiMessage.setText("AI正在分析赛道并生成约0.5米分段的平滑行车线，可能需要1-3分钟。");
+        new Thread(() -> {
+            try {
+                TrackData track = callAIForImageTrack(selectedAIImage, selectedAIFinishPoint);
+                runOnUiThread(() -> { addTrack(track); toast("已生成并导入：" + track.name); backHome(); });
+            } catch (Exception e) {
+                runOnUiThread(() -> { if (aiMessage != null) aiMessage.setText("生成失败，请检查Key、网络或图片质量。"); toast("AI生成失败：" + e.getMessage()); });
+            }
+        }).start();
+    }
+
+    private void showMapDrawer() { isMainScreen = false; pauseCamera(); setContentView(new MapDrawerView(this)); }
+    private void backHome() { isMainScreen = true; buildMainUi(); if (selectedTrack >= 0) selectTrack(selectedTrack); requestCameraIfNeeded(); startLocationUpdatesIfAllowed(); }
 
     private void saveTracks() { try { JSONArray arr = new JSONArray(); for (TrackData t : tracks) { JSONObject o = new JSONObject(); o.put("trackName", t.name); o.put("trackLength", t.length); o.put("cornerCount", t.cornerCount); JSONArray pts = new JSONArray(); for (TrackPoint p : t.points) { JSONObject po = new JSONObject(); po.put("latitude", p.latitude); po.put("longitude", p.longitude); po.put("speed", p.speed); po.put("color", p.color); pts.put(po); } o.put("points", pts); arr.put(o); } prefs.edit().putString("tracks", arr.toString()).apply(); } catch (Exception ignored) {} }
-    private void loadTracks() { try { String raw = prefs.getString("tracks", null); if (raw == null) return; JSONArray arr = new JSONArray(raw); for (int i = 0; i < arr.length(); i++) tracks.add(parseTrack(arr.getJSONObject(i).toString(), "Local Track")); } catch (Exception ignored) {} }
+    private void loadTracks() { try { String raw = prefs.getString("tracks", null); if (raw == null) return; JSONArray arr = new JSONArray(raw); for (int i = 0; i < arr.length(); i++) tracks.add(parseTrack(arr.getJSONObject(i).toString(), "本地赛道")); } catch (Exception ignored) {} }
 
-    private void startCameraWhenReady() { cameraPreview.setSurfaceTextureListener(new TextureView.SurfaceTextureListener() { public void onSurfaceTextureAvailable(SurfaceTexture s, int w, int h) { openCamera(s); } public void onSurfaceTextureSizeChanged(SurfaceTexture s, int w, int h) {} public boolean onSurfaceTextureDestroyed(SurfaceTexture s) { return true; } public void onSurfaceTextureUpdated(SurfaceTexture s) {} }); if (cameraPreview.isAvailable()) openCamera(cameraPreview.getSurfaceTexture()); }
-    private void restartCamera() { if (cameraSession != null) cameraSession.close(); if (cameraDevice != null) cameraDevice.close(); startCameraWhenReady(); }
-    private void openCamera(SurfaceTexture st) { try { CameraManager m = (CameraManager) getSystemService(CAMERA_SERVICE); String id = findBackCamera(m); if (id == null) { showNoCameraBackground("No camera: emulator preview mode"); return; } st.setDefaultBufferSize(lowHeatMode ? 1280 : 1920, lowHeatMode ? 720 : 1080); if (checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) return; m.openCamera(id, new CameraDevice.StateCallback() { public void onOpened(CameraDevice c) { cameraDevice = c; startPreview(st); } public void onDisconnected(CameraDevice c) { c.close(); } public void onError(CameraDevice c, int e) { c.close(); showNoCameraBackground("Camera error: " + e); } }, null); } catch (Exception e) { showNoCameraBackground("No usable camera: " + e.getMessage()); } }
+    private void startCameraWhenReady() { if (!isMainScreen || cameraPreview == null) return; cameraPreview.setSurfaceTextureListener(new TextureView.SurfaceTextureListener() { public void onSurfaceTextureAvailable(SurfaceTexture s, int w, int h) { openCamera(s); } public void onSurfaceTextureSizeChanged(SurfaceTexture s, int w, int h) {} public boolean onSurfaceTextureDestroyed(SurfaceTexture s) { pauseCamera(); return true; } public void onSurfaceTextureUpdated(SurfaceTexture s) {} }); if (cameraPreview.isAvailable()) openCamera(cameraPreview.getSurfaceTexture()); }
+    private void restartCamera() { pauseCamera(); startCameraWhenReady(); }
+    private void openCamera(SurfaceTexture st) { if (!isMainScreen) return; try { CameraManager m = (CameraManager) getSystemService(CAMERA_SERVICE); String id = findBackCamera(m); if (id == null) { showNoCameraBackground("无相机：模拟器预览模式"); return; } st.setDefaultBufferSize(lowHeatMode ? 1280 : 1920, lowHeatMode ? 720 : 1080); if (checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) return; m.openCamera(id, new CameraDevice.StateCallback() { public void onOpened(CameraDevice c) { cameraDevice = c; startPreview(st); } public void onDisconnected(CameraDevice c) { c.close(); } public void onError(CameraDevice c, int e) { c.close(); showNoCameraBackground("相机错误：" + e); } }, null); } catch (Exception e) { showNoCameraBackground("无可用相机：" + e.getMessage()); } }
     private String findBackCamera(CameraManager m) throws CameraAccessException { for (String id : m.getCameraIdList()) { Integer f = m.getCameraCharacteristics(id).get(CameraCharacteristics.LENS_FACING); if (f != null && f == CameraCharacteristics.LENS_FACING_BACK) return id; } return m.getCameraIdList().length > 0 ? m.getCameraIdList()[0] : null; }
-    private void startPreview(SurfaceTexture t) { try { Surface s = new Surface(t); CaptureRequest.Builder b = cameraDevice.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW); b.addTarget(s); cameraDevice.createCaptureSession(Collections.singletonList(s), new CameraCaptureSession.StateCallback() { public void onConfigured(CameraCaptureSession session) { cameraSession = session; try { session.setRepeatingRequest(b.build(), null, null); } catch (Exception e) { showNoCameraBackground("Preview failed"); } } public void onConfigureFailed(CameraCaptureSession session) { showNoCameraBackground("Preview config failed"); } }, null); } catch (Exception e) { showNoCameraBackground("Preview failed: " + e.getMessage()); } }
-    @Override protected void onDestroy() { super.onDestroy(); if (cameraSession != null) cameraSession.close(); if (cameraDevice != null) cameraDevice.close(); }
+    private void startPreview(SurfaceTexture t) { try { Surface s = new Surface(t); CaptureRequest.Builder b = cameraDevice.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW); b.addTarget(s); cameraDevice.createCaptureSession(Collections.singletonList(s), new CameraCaptureSession.StateCallback() { public void onConfigured(CameraCaptureSession session) { cameraSession = session; try { session.setRepeatingRequest(b.build(), null, null); } catch (Exception e) { showNoCameraBackground("预览失败"); } } public void onConfigureFailed(CameraCaptureSession session) { showNoCameraBackground("预览配置失败"); } }, null); } catch (Exception e) { showNoCameraBackground("预览失败：" + e.getMessage()); } }
+    @Override protected void onDestroy() { super.onDestroy(); stopScreenRecordingIfNeeded(); pauseCamera(); if (locationService != null && locationListener != null) locationService.removeUpdates(locationListener); }
 
     private void toast(String s) { Toast.makeText(this, s, Toast.LENGTH_LONG).show(); }
     private double computeLength(List<TrackPoint> pts) { double d = 0; for (int i = 1; i < pts.size(); i++) d += distanceMeters(pts.get(i - 1), pts.get(i)); return d; }
     private double distanceMeters(TrackPoint a, TrackPoint b) { double dLat = Math.toRadians(b.latitude - a.latitude), dLon = Math.toRadians(b.longitude - a.longitude), lat1 = Math.toRadians(a.latitude), lat2 = Math.toRadians(b.latitude); double h = Math.sin(dLat / 2) * Math.sin(dLat / 2) + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLon / 2) * Math.sin(dLon / 2); return 6371000.0 * 2.0 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h)); }
 
     final class MapDrawerView extends LinearLayout {
-        final DrawCanvas canvas; final EditText search;
-        MapDrawerView(Context c) { super(c); setOrientation(VERTICAL); setPadding(dp(12), dp(12), dp(12), dp(12)); setBackgroundColor(Color.rgb(53, 120, 150)); search = new EditText(c); search.setHint("Search place, then draw track"); search.setTextColor(Color.WHITE); search.setHintTextColor(0xAAFFFFFF); search.setBackground(glassPanel(999, 28)); search.setPadding(dp(12), 0, dp(12), 0); Button find = new Button(c); find.setText("Search"); Button close = new Button(c); close.setText("Close Loop"); Button ai = new Button(c); ai.setText("AI Brake Zones"); Button home = new Button(c); home.setText("Back"); LinearLayout top = glassContainer(999, 28); top.setPadding(dp(10), dp(8), dp(10), dp(8)); top.addView(search, new LinearLayout.LayoutParams(0, dp(52), 1)); applyGlassButton(find); applyGlassButton(close); applyGlassButton(ai); applyGlassButton(home); top.addView(find); top.addView(close); top.addView(ai); top.addView(home); addView(top); canvas = new DrawCanvas(c); LinearLayout.LayoutParams canvasLp = new LinearLayout.LayoutParams(-1, 0, 1); canvasLp.setMargins(0, dp(12), 0, 0); addView(canvas, canvasLp); find.setOnClickListener(v -> searchPlace()); close.setOnClickListener(v -> canvas.closeLoop()); ai.setOnClickListener(v -> generateFromDrawing()); home.setOnClickListener(v -> backHome()); }
-        void searchPlace() { try { List<Address> list = new Geocoder(MainActivity.this).getFromLocationName(search.getText().toString(), 1); if (list != null && !list.isEmpty()) { canvas.centerLat = list.get(0).getLatitude(); canvas.centerLon = list.get(0).getLongitude(); toast("Located; start drawing"); } } catch (Exception e) { toast("Search failed: " + e.getMessage()); } }
-        void generateFromDrawing() { if (!canvas.closed()) { toast("Close loop first"); return; } ArrayList<TrackPoint> pts = canvas.toTrackPoints(); new Thread(() -> { try { TrackData t = callAIForBrakeZones(pts); runOnUiThread(() -> { addTrack(t); backHome(); }); } catch (Exception e) { TrackData t = new TrackData(); t.name = "Map Draw Track"; t.points.addAll(pts); t.length = computeLength(pts); markLocalBrakeZones(t.points); runOnUiThread(() -> { addTrack(t); toast("AI failed; local brake zones generated"); backHome(); }); } }).start(); }
+        final DrawCanvas canvas;
+        final EditText search;
+        final EditText trackName;
+        final TextView message;
+
+        MapDrawerView(Context context) {
+            super(context);
+            setOrientation(VERTICAL);
+            setPadding(dp(12), dp(12), dp(12), dp(12));
+            setBackgroundColor(Color.BLACK);
+            LinearLayout top = new LinearLayout(context);
+            top.setGravity(Gravity.CENTER_VERTICAL);
+            search = new EditText(context);
+            search.setHint("搜索卡丁车场/地点");
+            search.setSingleLine(true);
+            search.setTextColor(Color.WHITE);
+            search.setHintTextColor(0xAAFFFFFF);
+            search.setBackground(glassPanel(999, 14));
+            search.setPadding(dp(12), 0, dp(12), 0);
+            Button find = addButton(top, "搜索", v -> searchPlace());
+            top.addView(search, 0, new LinearLayout.LayoutParams(0, dp(52), 1));
+            addView(top, new LinearLayout.LayoutParams(-1, dp(62)));
+            LinearLayout mode = new LinearLayout(context);
+            Button move = addButton(mode, "移动缩放", v -> { canvas.drawMode = false; canvas.invalidate(); });
+            Button draw = addButton(mode, "绘制", v -> { canvas.drawMode = true; canvas.invalidate(); });
+            addView(mode, new LinearLayout.LayoutParams(-1, dp(62)));
+            canvas = new DrawCanvas(context);
+            LinearLayout.LayoutParams canvasLp = new LinearLayout.LayoutParams(-1, 0, 1);
+            canvasLp.setMargins(0, dp(8), 0, dp(8));
+            addView(canvas, canvasLp);
+            trackName = aiField("赛道名称", "地图绘制赛道", false);
+            addView(trackName);
+            message = label("模式1可移动缩放地图；切到绘制模式后在实景地图上描出赛道。");
+            message.setTextColor(Color.argb(190, 255, 255, 255));
+            addView(message);
+            LinearLayout actions = new LinearLayout(context);
+            addButton(actions, "撤销", v -> canvas.undo());
+            addButton(actions, "清空", v -> canvas.clear());
+            addButton(actions, "首尾相接", v -> canvas.closeLoop());
+            addButton(actions, "关闭", v -> backHome());
+            addView(actions, new LinearLayout.LayoutParams(-1, dp(62)));
+            Button ai = new Button(context);
+            ai.setText("发送地图轨迹给AI生成刹车区");
+            applyGlassButton(ai);
+            ai.setOnClickListener(v -> generateFromDrawing());
+            addView(ai, new LinearLayout.LayoutParams(-1, dp(58)));
+        }
+
+        void searchPlace() { try { List<Address> list = new Geocoder(MainActivity.this).getFromLocationName(search.getText().toString(), 1); if (list != null && !list.isEmpty()) { canvas.centerLat = list.get(0).getLatitude(); canvas.centerLon = list.get(0).getLongitude(); message.setText("已定位到：" + (list.get(0).getFeatureName() == null ? search.getText().toString() : list.get(0).getFeatureName()) + "。切到绘制模式后描出赛道。"); } } catch (Exception e) { toast("搜索失败：" + e.getMessage()); } }
+        void generateFromDrawing() { if (!canvas.closed()) { toast("赛道必须首尾相接后才能生成"); return; } message.setText("AI正在根据地图轨迹生成速度和刹车区。"); ArrayList<TrackPoint> pts = canvas.toTrackPoints(); new Thread(() -> { try { TrackData t = callAIForBrakeZones(pts); runOnUiThread(() -> { addTrack(t); backHome(); }); } catch (Exception e) { TrackData t = new TrackData(); t.name = trackName.getText().toString().trim().isEmpty() ? "地图绘制赛道" : trackName.getText().toString().trim(); t.points.addAll(pts); t.length = computeLength(pts); markLocalBrakeZones(t.points); runOnUiThread(() -> { addTrack(t); toast("AI失败，已生成本地刹车区"); backHome(); }); } }).start(); }
     }
 
-    final class DrawCanvas extends View { final Paint p = new Paint(Paint.ANTI_ALIAS_FLAG); final ArrayList<PointF> drawn = new ArrayList<>(); double centerLat = 31.2304, centerLon = 121.4737; DrawCanvas(Context c) { super(c); p.setStrokeWidth(7); p.setStrokeCap(Paint.Cap.ROUND); p.setColor(Color.GREEN); } protected void onDraw(Canvas c) { c.drawColor(Color.rgb(18, 22, 24)); p.setStyle(Paint.Style.FILL); p.setTextSize(34); c.drawText("Draw mode: drag a closed track", 30, 50, p); p.setStyle(Paint.Style.STROKE); for (int i = 1; i < drawn.size(); i++) c.drawLine(drawn.get(i - 1).x, drawn.get(i - 1).y, drawn.get(i).x, drawn.get(i).y, p); } public boolean onTouchEvent(android.view.MotionEvent e) { if (e.getAction() == android.view.MotionEvent.ACTION_DOWN || e.getAction() == android.view.MotionEvent.ACTION_MOVE) { PointF pt = new PointF(e.getX(), e.getY()); if (drawn.isEmpty() || dist(drawn.get(drawn.size() - 1), pt) > 8) { drawn.add(pt); invalidate(); } return true; } return true; } void closeLoop() { if (drawn.size() > 2) { drawn.add(new PointF(drawn.get(0).x, drawn.get(0).y)); invalidate(); } } boolean closed() { return drawn.size() > 3 && dist(drawn.get(0), drawn.get(drawn.size() - 1)) < 20; } float dist(PointF a, PointF b) { return (float) Math.hypot(a.x - b.x, a.y - b.y); } ArrayList<TrackPoint> toTrackPoints() { ArrayList<TrackPoint> out = new ArrayList<>(); double mpp = 0.5, latScale = 111320.0, lonScale = Math.max(Math.cos(Math.toRadians(centerLat)) * 111320.0, 1); for (PointF pt : drawn) { double east = (pt.x - getWidth() / 2.0) * mpp; double north = (getHeight() / 2.0 - pt.y) * mpp; out.add(new TrackPoint(centerLat + north / latScale, centerLon + east / lonScale, 60, "green")); } return out; } }
+    final class DrawCanvas extends View {
+        final Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
+        final ArrayList<PointF> drawn = new ArrayList<>();
+        double centerLat = 31.2304, centerLon = 121.4737;
+        boolean drawMode = false;
 
-    private TrackData callAIForBrakeZones(ArrayList<TrackPoint> pts) throws Exception { String key = prefs.getString("apiKey", ""); if (key.isEmpty()) throw new IOException("missing key"); String base = prefs.getString("baseUrl", "https://api.openai.com/v1"); String model = prefs.getString("model", "gpt-4.1-mini"); JSONArray arr = new JSONArray(); for (TrackPoint p : pts) { JSONObject o = new JSONObject(); o.put("latitude", p.latitude); o.put("longitude", p.longitude); arr.put(o); } JSONObject body = new JSONObject(); body.put("model", model); body.put("temperature", 0.1); body.put("max_tokens", 12000); JSONArray msgs = new JSONArray(); msgs.put(new JSONObject().put("role", "system").put("content", "Generate JSON for a closed kart track. points include latitude longitude speed color. color only green/orange/red. Mark red/orange before corners. Keep input shape. Output JSON only.")); msgs.put(new JSONObject().put("role", "user").put("content", arr.toString())); body.put("messages", msgs); HttpURLConnection con = (HttpURLConnection) new URL(base + "/chat/completions").openConnection(); con.setRequestMethod("POST"); con.setRequestProperty("Authorization", "Bearer " + key); con.setRequestProperty("Content-Type", "application/json"); con.setDoOutput(true); con.getOutputStream().write(body.toString().getBytes(StandardCharsets.UTF_8)); String raw = readStream(con.getInputStream()); String content = new JSONObject(raw).getJSONArray("choices").getJSONObject(0).getJSONObject("message").getString("content"); String json = content.substring(content.indexOf('{'), content.lastIndexOf('}') + 1); return parseTrack(json, "AI Map Track"); }
-    private void markLocalBrakeZones(List<TrackPoint> pts) { for (int i = 0; i < pts.size(); i++) { TrackPoint p = pts.get(i); if (i % 24 < 5) pts.set(i, new TrackPoint(p.latitude, p.longitude, 35, "red")); else if (i % 24 < 9) pts.set(i, new TrackPoint(p.latitude, p.longitude, 48, "orange")); } }
+        DrawCanvas(Context context) { super(context); p.setStrokeWidth(dp(5)); p.setStrokeCap(Paint.Cap.ROUND); p.setStrokeJoin(Paint.Join.ROUND); }
+        protected void onDraw(Canvas canvas) { canvas.drawColor(Color.rgb(8, 8, 8)); p.setStyle(Paint.Style.FILL); p.setTextSize(dp(18)); p.setColor(Color.WHITE); canvas.drawText(drawMode ? "绘制赛道线" : "移动缩放地图", dp(18), dp(32), p); canvas.drawText("点数：" + drawn.size() + " · 长度：" + (int) computeLength(toTrackPoints()) + "m · " + (closed() ? "已首尾相接" : "未闭合"), dp(18), dp(58), p); p.setStyle(Paint.Style.STROKE); p.setStrokeWidth(dp(5)); p.setColor(Color.rgb(0, 255, 70)); for (int i = 1; i < drawn.size(); i++) canvas.drawLine(drawn.get(i - 1).x, drawn.get(i - 1).y, drawn.get(i).x, drawn.get(i).y, p); }
+        public boolean onTouchEvent(android.view.MotionEvent event) { if (!drawMode) return true; if (event.getAction() == android.view.MotionEvent.ACTION_DOWN || event.getAction() == android.view.MotionEvent.ACTION_MOVE) { PointF pt = new PointF(event.getX(), event.getY()); if (drawn.isEmpty() || dist(drawn.get(drawn.size() - 1), pt) > dp(2)) { drawn.add(pt); invalidate(); } return true; } return true; }
+        void undo() { if (!drawn.isEmpty()) { drawn.remove(drawn.size() - 1); invalidate(); } }
+        void clear() { drawn.clear(); invalidate(); }
+        void closeLoop() { if (drawn.size() > 2) { drawn.add(new PointF(drawn.get(0).x, drawn.get(0).y)); invalidate(); } }
+        boolean closed() { return drawn.size() > 3 && dist(drawn.get(0), drawn.get(drawn.size() - 1)) < dp(20); }
+        float dist(PointF a, PointF b) { return (float) Math.hypot(a.x - b.x, a.y - b.y); }
+        ArrayList<TrackPoint> toTrackPoints() { ArrayList<TrackPoint> out = new ArrayList<>(); double mpp = 0.5, latScale = 111320.0, lonScale = Math.max(Math.cos(Math.toRadians(centerLat)) * 111320.0, 1); for (PointF pt : drawn) { double east = (pt.x - getWidth() / 2.0) * mpp; double north = (getHeight() / 2.0 - pt.y) * mpp; out.add(new TrackPoint(centerLat + north / latScale, centerLon + east / lonScale, 60, "green")); } return out; }
+    }
 
+    final class ImagePointView extends View {
+        final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        Bitmap bitmap;
+        RectF imageRect = new RectF();
 
-    static final class LiquidBackdropView extends View {
-        private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
-        private final Paint line = new Paint(Paint.ANTI_ALIAS_FLAG);
-        private final RectF rect = new RectF();
+        ImagePointView(Context context) { super(context); setBackgroundColor(Color.BLACK); }
+        void setImage(Bitmap image) { bitmap = image; invalidate(); }
 
-        LiquidBackdropView(Context context) {
+        @Override protected void onDraw(Canvas canvas) {
+            super.onDraw(canvas);
+            paint.setStyle(Paint.Style.FILL);
+            paint.setColor(Color.BLACK);
+            canvas.drawRoundRect(new RectF(0, 0, getWidth(), getHeight()), dp(16), dp(16), paint);
+            if (bitmap == null) {
+                paint.setColor(Color.argb(170, 255, 255, 255));
+                paint.setTextSize(dp(22));
+                paint.setTextAlign(Paint.Align.CENTER);
+                canvas.drawText("请选择一张赛道俯视图", getWidth() / 2f, getHeight() / 2f, paint);
+                return;
+            }
+            fitImageRect();
+            canvas.drawBitmap(bitmap, null, imageRect, null);
+            if (selectedAIFinishPoint != null) {
+                float x = imageRect.left + selectedAIFinishPoint.x / bitmap.getWidth() * imageRect.width();
+                float y = imageRect.top + selectedAIFinishPoint.y / bitmap.getHeight() * imageRect.height();
+                paint.setStyle(Paint.Style.FILL);
+                paint.setColor(Color.RED);
+                canvas.drawCircle(x, y, dp(9), paint);
+                paint.setStyle(Paint.Style.STROKE);
+                paint.setStrokeWidth(dp(3));
+                paint.setColor(Color.WHITE);
+                canvas.drawCircle(x, y, dp(9), paint);
+            }
+        }
+
+        @Override public boolean onTouchEvent(android.view.MotionEvent event) {
+            if (bitmap == null) return true;
+            if (event.getAction() == android.view.MotionEvent.ACTION_DOWN || event.getAction() == android.view.MotionEvent.ACTION_UP) {
+                fitImageRect();
+                float x = Math.min(Math.max(event.getX(), imageRect.left), imageRect.right);
+                float y = Math.min(Math.max(event.getY(), imageRect.top), imageRect.bottom);
+                selectedAIFinishPoint = new PointF((x - imageRect.left) / imageRect.width() * bitmap.getWidth(), (y - imageRect.top) / imageRect.height() * bitmap.getHeight());
+                if (aiMessage != null) aiMessage.setText("已选择终点：x=" + (int) selectedAIFinishPoint.x + "，y=" + (int) selectedAIFinishPoint.y + "。");
+                invalidate();
+                return true;
+            }
+            return true;
+        }
+
+        private void fitImageRect() {
+            if (bitmap == null || getWidth() <= 0 || getHeight() <= 0) { imageRect.setEmpty(); return; }
+            float scale = Math.min(getWidth() / (float) bitmap.getWidth(), getHeight() / (float) bitmap.getHeight());
+            float width = bitmap.getWidth() * scale;
+            float height = bitmap.getHeight() * scale;
+            imageRect.set((getWidth() - width) / 2f, (getHeight() - height) / 2f, (getWidth() + width) / 2f, (getHeight() + height) / 2f);
+        }
+    }
+
+    final class CalibrationCanvas extends View {
+        final TrackData track;
+        final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        int selectedIndex = 0;
+        int headingDegrees = 0;
+
+        CalibrationCanvas(Context context, TrackData track) {
             super(context);
-            line.setStyle(Paint.Style.STROKE);
-            line.setStrokeCap(Paint.Cap.ROUND);
+            this.track = track;
+            setBackgroundColor(Color.BLACK);
         }
 
         @Override protected void onDraw(Canvas canvas) {
-            int w = Math.max(getWidth(), 1);
-            int h = Math.max(getHeight(), 1);
-            paint.setShader(new LinearGradient(0, 0, w, h,
-                    new int[]{Color.rgb(221, 245, 255), Color.rgb(29, 181, 227), Color.rgb(0, 96, 221), Color.rgb(232, 246, 250)},
-                    new float[]{0f, 0.34f, 0.72f, 1f}, Shader.TileMode.CLAMP));
-            canvas.drawRect(0, 0, w, h, paint);
-            paint.setShader(new RadialGradient(w * 0.24f, h * 0.22f, w * 0.72f,
-                    new int[]{Color.argb(190, 255, 255, 255), Color.argb(70, 158, 235, 255), Color.TRANSPARENT},
-                    new float[]{0f, 0.45f, 1f}, Shader.TileMode.CLAMP));
-            canvas.drawRect(0, 0, w, h, paint);
-            paint.setShader(new RadialGradient(w * 0.82f, h * 0.82f, w * 0.52f,
-                    new int[]{Color.argb(135, 255, 255, 255), Color.argb(45, 63, 210, 255), Color.TRANSPARENT},
-                    new float[]{0f, 0.48f, 1f}, Shader.TileMode.CLAMP));
-            canvas.drawRect(0, 0, w, h, paint);
-            paint.setShader(null);
-            line.setStrokeWidth(Math.max(18f, w * 0.035f));
-            line.setColor(Color.argb(130, 255, 255, 255));
-            rect.set(-w * 0.16f, h * 0.05f, w * 1.12f, h * 0.76f);
-            canvas.drawArc(rect, 188, 98, false, line);
-            line.setStrokeWidth(Math.max(26f, w * 0.046f));
-            line.setColor(Color.argb(86, 180, 255, 218));
-            rect.set(-w * 0.20f, h * 0.11f, w * 1.06f, h * 0.92f);
-            canvas.drawArc(rect, 202, 105, false, line);
+            super.onDraw(canvas);
+            if (track.points.size() < 2) return;
+            ArrayList<PointF> points = projectedPoints();
+            paint.setStyle(Paint.Style.STROKE);
+            paint.setStrokeWidth(dp(3));
+            paint.setStrokeCap(Paint.Cap.ROUND);
+            paint.setColor(Color.argb(190, 255, 255, 255));
+            for (int i = 1; i < points.size(); i++) canvas.drawLine(points.get(i - 1).x, points.get(i - 1).y, points.get(i).x, points.get(i).y, paint);
+            paint.setStyle(Paint.Style.FILL);
+            for (int i = 0; i < points.size(); i++) {
+                paint.setColor(colorForTrack(track.points.get(i).color, 1f));
+                canvas.drawCircle(points.get(i).x, points.get(i).y, dp(3), paint);
+            }
+            PointF selected = points.get(Math.min(selectedIndex, points.size() - 1));
+            paint.setColor(Color.RED);
+            canvas.drawCircle(selected.x, selected.y, dp(9), paint);
+            paint.setStyle(Paint.Style.STROKE);
+            paint.setStrokeWidth(dp(5));
+            float radians = (float) Math.toRadians(headingDegrees);
+            canvas.drawLine(selected.x, selected.y, selected.x + (float) Math.cos(radians) * dp(54), selected.y - (float) Math.sin(radians) * dp(54), paint);
+        }
+
+        @Override public boolean onTouchEvent(android.view.MotionEvent event) {
+            if (event.getAction() == android.view.MotionEvent.ACTION_DOWN || event.getAction() == android.view.MotionEvent.ACTION_UP) {
+                ArrayList<PointF> points = projectedPoints();
+                float best = Float.MAX_VALUE;
+                for (int i = 0; i < points.size(); i++) {
+                    float distance = (float) Math.hypot(points.get(i).x - event.getX(), points.get(i).y - event.getY());
+                    if (distance < best) { best = distance; selectedIndex = i; }
+                }
+                invalidate();
+                return true;
+            }
+            return true;
+        }
+
+        ArrayList<PointF> projectedPoints() {
+            ArrayList<PointF> out = new ArrayList<>();
+            TrackPoint origin = track.points.get(0);
+            double latScale = 111320.0;
+            double lonScale = Math.max(Math.cos(Math.toRadians(origin.latitude)) * 111320.0, 1);
+            double minX = Double.MAX_VALUE, maxX = -Double.MAX_VALUE, minY = Double.MAX_VALUE, maxY = -Double.MAX_VALUE;
+            ArrayList<PointF> raw = new ArrayList<>();
+            for (TrackPoint point : track.points) {
+                float x = (float) ((point.longitude - origin.longitude) * lonScale);
+                float y = (float) (-(point.latitude - origin.latitude) * latScale);
+                raw.add(new PointF(x, y));
+                minX = Math.min(minX, x); maxX = Math.max(maxX, x); minY = Math.min(minY, y); maxY = Math.max(maxY, y);
+            }
+            float padding = dp(28);
+            double scale = Math.min((getWidth() - padding * 2) / Math.max(maxX - minX, 1), (getHeight() - padding * 2) / Math.max(maxY - minY, 1));
+            for (PointF point : raw) out.add(new PointF((float) (padding + (point.x - minX) * scale), (float) (padding + (maxY - point.y) * scale)));
+            return out;
         }
     }
 
+    private TrackData callAIForBrakeZones(ArrayList<TrackPoint> pts) throws Exception { String key = prefs.getString("apiKey", ""); if (key.isEmpty()) throw new IOException("missing key"); String base = prefs.getString("baseUrl", "https://api.tutujin.com/v1"); String model = prefs.getString("model", "claude-3-5-sonnet-20240620"); JSONArray arr = new JSONArray(); for (TrackPoint p : pts) { JSONObject o = new JSONObject(); o.put("latitude", p.latitude); o.put("longitude", p.longitude); arr.put(o); } JSONObject body = new JSONObject(); body.put("model", model); body.put("temperature", 0.1); body.put("max_tokens", 12000); JSONArray msgs = new JSONArray(); msgs.put(new JSONObject().put("role", "system").put("content", MAP_BRAKE_ZONE_PROMPT)); msgs.put(new JSONObject().put("role", "user").put("content", arr.toString())); body.put("messages", msgs); HttpURLConnection con = openAIConnection(base, key); con.getOutputStream().write(body.toString().getBytes(StandardCharsets.UTF_8)); String raw = readStream(con.getInputStream()); String content = new JSONObject(raw).getJSONArray("choices").getJSONObject(0).getJSONObject("message").getString("content"); return parseTrack(extractJSONObject(content), "AI地图赛道"); }
+
+    private TrackData callAIForImageTrack(Bitmap source, PointF finishPoint) throws Exception {
+        String key = prefs.getString("apiKey", "").trim();
+        if (key.isEmpty()) throw new IOException("missing key");
+        String base = prefs.getString("baseUrl", "https://api.tutujin.com/v1");
+        String model = prefs.getString("model", "claude-3-5-sonnet-20240620");
+        Bitmap image = resizeBitmap(source, 1170);
+        float scaleX = image.getWidth() / (float) Math.max(source.getWidth(), 1);
+        float scaleY = image.getHeight() / (float) Math.max(source.getHeight(), 1);
+        PointF uploadedFinish = new PointF(finishPoint.x * scaleX, finishPoint.y * scaleY);
+        ByteArrayOutputStream jpeg = new ByteArrayOutputStream();
+        image.compress(Bitmap.CompressFormat.JPEG, 82, jpeg);
+        String imageBase64 = Base64.encodeToString(jpeg.toByteArray(), Base64.NO_WRAP);
+        JSONObject body = new JSONObject();
+        body.put("model", model);
+        body.put("temperature", 0.1);
+        body.put("max_tokens", 12000);
+        JSONArray messages = new JSONArray();
+        messages.put(new JSONObject().put("role", "system").put("content", new JSONArray().put(new JSONObject().put("type", "text").put("text", IMAGE_TRACK_PROMPT))));
+        JSONArray userContent = new JSONArray();
+        userContent.put(new JSONObject().put("type", "text").put("text", "终点像素坐标：x=" + (int) uploadedFinish.x + "，y=" + (int) uploadedFinish.y + "。图片尺寸：width=" + image.getWidth() + "，height=" + image.getHeight() + "。请把该点作为起终点附近参考。"));
+        userContent.put(new JSONObject().put("type", "image_url").put("image_url", new JSONObject().put("url", "data:image/jpeg;base64," + imageBase64)));
+        messages.put(new JSONObject().put("role", "user").put("content", userContent));
+        body.put("messages", messages);
+        HttpURLConnection con = openAIConnection(base, key);
+        con.getOutputStream().write(body.toString().getBytes(StandardCharsets.UTF_8));
+        String raw = readStream(con.getInputStream());
+        String content = new JSONObject(raw).getJSONArray("choices").getJSONObject(0).getJSONObject("message").getString("content");
+        return convertImageTrack(new JSONObject(extractJSONObject(content)));
+    }
+
+    private HttpURLConnection openAIConnection(String base, String key) throws Exception {
+        HttpURLConnection con = (HttpURLConnection) new URL(base + "/chat/completions").openConnection();
+        con.setRequestMethod("POST");
+        con.setRequestProperty("Authorization", "Bearer " + key);
+        con.setRequestProperty("Content-Type", "application/json");
+        con.setConnectTimeout(30000);
+        con.setReadTimeout(180000);
+        con.setDoOutput(true);
+        return con;
+    }
+
+    private Bitmap resizeBitmap(Bitmap source, int maxDimension) {
+        int max = Math.max(source.getWidth(), source.getHeight());
+        if (max <= maxDimension) return source;
+        float scale = maxDimension / (float) max;
+        return Bitmap.createScaledBitmap(source, Math.round(source.getWidth() * scale), Math.round(source.getHeight() * scale), true);
+    }
+
+    private TrackData convertImageTrack(JSONObject aiTrack) throws Exception {
+        JSONArray points = aiTrack.getJSONArray("points");
+        TrackData track = new TrackData();
+        track.name = aiTrack.optString("trackName", "AI生成赛道");
+        track.length = aiTrack.optDouble("trackLength", 0);
+        track.cornerCount = aiTrack.optInt("cornerCount", 0);
+        double pixelLength = 0;
+        for (int i = 1; i < points.length(); i++) {
+            JSONObject a = points.getJSONObject(i - 1), b = points.getJSONObject(i);
+            pixelLength += Math.hypot(b.optDouble("x") - a.optDouble("x"), b.optDouble("y") - a.optDouble("y"));
+        }
+        if (track.length <= 0) track.length = pixelLength * 0.5;
+        double metersPerPixel = pixelLength > 1 ? track.length / pixelLength : 0.5;
+        JSONObject start = points.getJSONObject(0);
+        double originLat = latestLocation != null ? latestLocation.getLatitude() : 31.234567;
+        double originLon = latestLocation != null ? latestLocation.getLongitude() : 121.345678;
+        double latScale = 111320.0;
+        double lonScale = Math.max(Math.cos(Math.toRadians(originLat)) * 111320.0, 1);
+        for (int i = 0; i < points.length(); i++) {
+            JSONObject point = points.getJSONObject(i);
+            double east = (point.optDouble("x") - start.optDouble("x")) * metersPerPixel;
+            double north = -(point.optDouble("y") - start.optDouble("y")) * metersPerPixel;
+            track.points.add(new TrackPoint(originLat + north / latScale, originLon + east / lonScale, point.optDouble("speed", 50), point.optString("color", "green")));
+        }
+        return track;
+    }
+
+    private String extractJSONObject(String text) {
+        String trimmed = text.trim();
+        int start = trimmed.indexOf('{');
+        int end = trimmed.lastIndexOf('}');
+        return start >= 0 && end >= start ? trimmed.substring(start, end + 1) : trimmed;
+    }
+    private void markLocalBrakeZones(List<TrackPoint> pts) { for (int i = 0; i < pts.size(); i++) { TrackPoint p = pts.get(i); if (i % 24 < 5) pts.set(i, new TrackPoint(p.latitude, p.longitude, 35, "red")); else if (i % 24 < 9) pts.set(i, new TrackPoint(p.latitude, p.longitude, 48, "orange")); } }
+
+    private int colorForTrack(String color, float alpha) {
+        int channel = Math.min(255, Math.max(0, (int) (alpha * 255)));
+        if ("red".equals(color)) return Color.argb(channel, 255, 12, 0);
+        if ("orange".equals(color)) return Color.argb(channel, 255, 156, 0);
+        return Color.argb(channel, 0, 255, 70);
+    }
+
+    private static final String IMAGE_TRACK_PROMPT = "你是专业卡丁车赛道分析AI。识别完整闭环赛道，按外-内-外原则生成平滑行车线，点间距约0.5米。只输出纯JSON，字段为trackName、trackLength、cornerCount、trackDescription、drivingTips、points。points每项包含x、y、speed、color、remark，color只能是green/orange/red。禁止输出JSON以外文字。";
+    private static final String MAP_BRAKE_ZONE_PROMPT = "你是专业卡丁车赛道工程师。用户已经在地图实景底图上画出首尾相接的赛道中心线。保留整体形状，重采样约0.5米间距，生成speed和color，green=全油门，orange=松油，red=刹车区。只输出纯JSON，字段为trackName、trackLength、cornerCount、points；points每项包含latitude、longitude、speed、color、remark。禁止输出JSON以外文字。";
 
     static final class GlassPanelDrawable extends Drawable {
         private final float radius;
@@ -401,6 +1164,9 @@ public class MainActivity extends Activity {
         final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
         List<TrackPoint> track = new ArrayList<>();
         double renderDistance = 160;
+        double opacity = 0.82;
+        double widthMeters = 0.5;
+        double brightness = 1.0;
         float verticalOffset = 0;
 
         DrivingLineOverlay(Context c) {
@@ -416,13 +1182,15 @@ public class MainActivity extends Activity {
         void setRenderDistance(double d) { renderDistance = d; invalidate(); }
         float getVerticalOffset() { return verticalOffset; }
         void setVerticalOffset(float v) { verticalOffset = v; invalidate(); }
+        void setLineStyle(double opacity, double widthMeters, double brightness) { this.opacity = opacity; this.widthMeters = widthMeters; this.brightness = brightness; paint.setStrokeWidth(dp((float) Math.max(4, widthMeters * 36))); invalidate(); }
 
         @Override protected void onDraw(Canvas canvas) {
             super.onDraw(canvas);
             if (track.size() < 2) return;
             List<PointF> pts = projectTrack();
             for (int i = 0; i < pts.size() - 1; i++) {
-                float alpha = i < pts.size() * 0.45f ? 0.82f : Math.max(0.1f, 1f - (i / (float) pts.size()));
+                float baseAlpha = i < pts.size() * 0.45f ? 1f : Math.max(0.1f, 1f - (i / (float) pts.size()));
+                float alpha = (float) (baseAlpha * opacity);
                 paint.setColor(colorFor(track.get(i % track.size()).color, alpha));
                 canvas.drawLine(pts.get(i).x, pts.get(i).y + verticalOffset, pts.get(i + 1).x, pts.get(i + 1).y + verticalOffset, paint);
             }
@@ -453,9 +1221,10 @@ public class MainActivity extends Activity {
 
         int colorFor(String color, float alpha) {
             int channel = Math.min(255, Math.max(0, (int) (alpha * 255)));
-            if ("red".equals(color)) return Color.argb(channel, 255, 0, 0);
-            if ("orange".equals(color)) return Color.argb(channel, 255, 210, 0);
-            return Color.argb(channel, 0, 255, 70);
+            int boost = Math.min(255, Math.max(80, (int) (brightness * 255)));
+            if ("red".equals(color)) return Color.argb(channel, boost, 0, 0);
+            if ("orange".equals(color)) return Color.argb(channel, boost, Math.min(220, boost), 0);
+            return Color.argb(channel, 0, boost, Math.min(90, boost));
         }
     }
 
