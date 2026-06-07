@@ -21,7 +21,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Show Xcode version
         run: |
@@ -63,7 +63,7 @@ jobs:
 
       - name: Upload xcodebuild log
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: xcodebuild-log
           path: ${{ env.ARTIFACT_DIR }}/xcodebuild.log
@@ -71,7 +71,7 @@ jobs:
           retention-days: 14
 
       - name: Upload unsigned IPA
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: GoKartARLine-unsigned-ipa
           path: ${{ env.ARTIFACT_DIR }}/${{ env.IPA_NAME }}
