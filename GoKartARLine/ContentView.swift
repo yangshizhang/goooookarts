@@ -54,17 +54,15 @@ struct ContentView: View {
     }
 
     private var bottomControls: some View {
-        GlassEffectContainer(spacing: 10) {
-            HStack(spacing: 10) {
-                Button("导入") { isImporting = true }
-                Button("赛道") { showingTrackList = true }
-                Button("校准") { locationManager.manualCalibrate(using: trackDataManager.selectedTrack) }
-                Button(isRecording ? "停止" : "录屏") { toggleRecording() }
-                Button("截图") { NotificationCenter.default.post(name: .captureARStillImage, object: nil) }
-                Button("设置") { showingSettings = true }
-            }
+        HStack(spacing: 10) {
+            Button("导入") { isImporting = true }
+            Button("赛道") { showingTrackList = true }
+            Button("校准") { locationManager.manualCalibrate(using: trackDataManager.selectedTrack) }
+            Button(isRecording ? "停止" : "录屏") { toggleRecording() }
+            Button("截图") { NotificationCenter.default.post(name: .captureARStillImage, object: nil) }
+            Button("设置") { showingSettings = true }
         }
-        .buttonStyle(.glassProminent)
+        .buttonStyle(.liquidGlassProminent)
         .controlSize(.large)
     }
 
@@ -171,15 +169,15 @@ private struct TrackListView: View {
             .background(.black)
             .navigationTitle("已导入赛道")
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
+                ToolbarItem(placement: .navigationBarLeading) {
                     HStack {
                         Button("AI生成") { showingAITrackGenerator = true }
                         Button("地图绘制") { showingMapTrackDrawer = true }
                     }
                 }
-                ToolbarItem(placement: .topBarTrailing) { Button("完成") { dismiss() } }
+                ToolbarItem(placement: .navigationBarTrailing) { Button("完成") { dismiss() } }
             }
-            .buttonStyle(.glass)
+            .buttonStyle(.liquidGlass)
             .sheet(isPresented: $showingAITrackGenerator) {
                 AITrackGeneratorView()
                     .environmentObject(manager)

@@ -50,8 +50,8 @@ struct SettingsView: View {
             .background(.black)
             .tint(.white)
             .navigationTitle("设置")
-            .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("完成") { dismiss() } } }
-            .buttonStyle(.glass)
+            .toolbar { ToolbarItem(placement: .navigationBarTrailing) { Button("完成") { dismiss() } } }
+            .buttonStyle(.liquidGlass)
         }
         .background(.black)
     }

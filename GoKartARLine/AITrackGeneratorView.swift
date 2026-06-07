@@ -24,7 +24,7 @@ struct AITrackGeneratorView: View {
                     Label(selectedImage == nil ? "选择赛道照片" : "更换赛道照片", systemImage: "photo")
                         .frame(maxWidth: .infinity)
                 }
-                .buttonStyle(.glassProminent)
+                .buttonStyle(.liquidGlassProminent)
 
                 VStack(spacing: 10) {
                     SecureField("AI接口Key（保存在本机Keychain）", text: $apiKey)
@@ -54,15 +54,15 @@ struct AITrackGeneratorView: View {
                         Label("AI生成并导入赛道", systemImage: "sparkles")
                     }
                 }
-                .buttonStyle(.glassProminent)
+                .buttonStyle(.liquidGlassProminent)
                 .disabled(selectedImage == nil || finishPoint == nil || apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || modelID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || baseURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isGenerating)
             }
             .padding()
             .background(.black)
             .navigationTitle("AI生成赛道")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("关闭") { dismiss() } } }
-            .onChange(of: selectedPhoto) { _, newValue in Task { await loadPhoto(newValue) } }
+            .toolbar { ToolbarItem(placement: .navigationBarTrailing) { Button("关闭") { dismiss() } } }
+            .onChange(of: selectedPhoto) { newValue in Task { await loadPhoto(newValue) } }
             .alert("AI生成失败", isPresented: Binding(get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } })) {
                 Button("知道了", role: .cancel) {}
             } message: { Text(errorMessage ?? "") }

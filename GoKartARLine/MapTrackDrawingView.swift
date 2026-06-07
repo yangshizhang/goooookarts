@@ -42,7 +42,7 @@ struct MapTrackDrawingView: View {
                     } label: {
                         if isSearching { ProgressView() } else { Image(systemName: "magnifyingglass") }
                     }
-                    .buttonStyle(.glassProminent)
+                    .buttonStyle(.liquidGlassProminent)
                     .disabled(searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isSearching)
                 }
 
@@ -52,7 +52,7 @@ struct MapTrackDrawingView: View {
                     }
                 }
                 .pickerStyle(.segmented)
-                .glassEffect(.regular, in: Capsule())
+                .liquidGlassControl(cornerRadius: 18)
 
                 AMapTrackDrawingMapView(
                     coordinates: $coordinates,
@@ -90,7 +90,7 @@ struct MapTrackDrawingView: View {
                     Button("首尾相接") { closeLoop() }
                         .disabled(coordinates.count < 3 || isClosed || isGenerating)
                 }
-                .buttonStyle(.glass)
+                .buttonStyle(.liquidGlass)
 
                 Button {
                     Task { await generateBrakeZones() }
@@ -102,14 +102,14 @@ struct MapTrackDrawingView: View {
                             .frame(maxWidth: .infinity)
                     }
                 }
-                .buttonStyle(.glassProminent)
+                .buttonStyle(.liquidGlassProminent)
                 .disabled(!isClosed || coordinates.count < 4 || isGenerating)
             }
             .padding()
             .background(.black)
             .navigationTitle("地图绘制赛道")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("关闭") { dismiss() } } }
+            .toolbar { ToolbarItem(placement: .navigationBarTrailing) { Button("关闭") { dismiss() } } }
             .alert("生成失败", isPresented: Binding(get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } })) {
                 Button("知道了", role: .cancel) {}
             } message: { Text(errorMessage ?? "") }

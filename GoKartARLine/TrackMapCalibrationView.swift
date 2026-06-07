@@ -60,7 +60,7 @@ struct TrackMapCalibrationView: View {
                     Slider(value: $headingDegrees, in: 0...359, step: 1)
                 }
                 .padding(12)
-                .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .modifier(LiquidGlassPanelModifier(cornerRadius: 14))
 
                 VStack(alignment: .leading, spacing: 4) {
                     Text("当前位置点：#\(track.points.isEmpty ? 0 : selectedIndex + 1) / \(track.points.count)")
@@ -80,7 +80,7 @@ struct TrackMapCalibrationView: View {
                     Label("加载赛道并应用校准", systemImage: "location.north.line.fill")
                         .frame(maxWidth: .infinity)
                 }
-                .buttonStyle(.glassProminent)
+                .buttonStyle(.liquidGlassProminent)
                 .disabled(track.points.isEmpty)
             }
             .padding()
