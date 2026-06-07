@@ -587,16 +587,6 @@ public class MainActivity extends Activity {
 
     private void showOnlineCenter() {
         LinearLayout box = glassDialogBox();
-        box.addView(sectionLabel("服务器"));
-        EditText base = aiField("Base URL", onlineBaseUrl, false);
-        box.addView(base);
-        LinearLayout serverTools = new LinearLayout(this);
-        addButton(serverTools, "保存地址", v -> {
-            onlineBaseUrl = normalizeOnlineBase(base.getText().toString());
-            prefs.edit().putString("onlineBaseUrl", onlineBaseUrl).apply();
-            toast("服务器地址已保存");
-        });
-        box.addView(serverTools, new LinearLayout.LayoutParams(-1, dp(62)));
 
         if (isOnlineLoggedIn()) {
             box.addView(sectionLabel("账号"));
@@ -617,30 +607,49 @@ public class MainActivity extends Activity {
             box.addView(info);
         } else {
             box.addView(sectionLabel("登录"));
+            TextView hint = label("使用用户名或邮箱登录。没有账号时，进入注册页填写邮箱验证码。");
+            hint.setTextSize(14);
+            hint.setTextColor(Color.argb(180, 255, 255, 255));
+            box.addView(hint);
             EditText login = aiField("用户名或邮箱", "", false);
             EditText loginPassword = aiField("密码", "", true);
             box.addView(login);
             box.addView(loginPassword);
             LinearLayout loginTools = new LinearLayout(this);
             addButton(loginTools, "登录", v -> loginOnline(login.getText().toString(), loginPassword.getText().toString()));
+            addButton(loginTools, "注册账号", v -> { closeOpenDialogs(); showRegisterOnlineDialog(); });
             box.addView(loginTools, new LinearLayout.LayoutParams(-1, dp(62)));
-
-            box.addView(sectionLabel("注册"));
-            EditText username = aiField("用户名", "", false);
-            EditText email = aiField("邮箱", "", false);
-            EditText password = aiField("密码", "", true);
-            EditText code = aiField("验证码", "", false);
-            box.addView(username);
-            box.addView(email);
-            box.addView(password);
-            box.addView(code);
-            LinearLayout registerTools = new LinearLayout(this);
-            addButton(registerTools, "获取验证码", v -> requestOnlineCode(email.getText().toString()));
-            addButton(registerTools, "注册", v -> registerOnline(username.getText().toString(), password.getText().toString(), email.getText().toString(), code.getText().toString()));
-            box.addView(registerTools, new LinearLayout.LayoutParams(-1, dp(62)));
         }
         showGlassDialog(new AlertDialog.Builder(this).setTitle("在线").setView(box).setPositiveButton("完成", null).create());
         animateChildrenStaggered(box);
+    }
+
+    private void showRegisterOnlineDialog() {
+        LinearLayout box = glassDialogBox();
+        box.addView(sectionLabel("注册账号"));
+        TextView hint = label("像网站注册一样填写用户名、邮箱、密码，再通过邮件验证码完成注册。");
+        hint.setTextSize(14);
+        hint.setTextColor(Color.argb(180, 255, 255, 255));
+        box.addView(hint);
+        EditText username = aiField("用户名", "", false);
+        EditText email = aiField("邮箱", "", false);
+        EditText password = aiField("密码", "", true);
+        EditText code = aiField("邮箱验证码", "", false);
+        box.addView(username);
+        box.addView(email);
+        box.addView(password);
+        box.addView(code);
+        LinearLayout registerTools = new LinearLayout(this);
+        addButton(registerTools, "获取验证码", v -> requestOnlineCode(email.getText().toString()));
+        addButton(registerTools, "完成注册", v -> registerOnline(username.getText().toString(), password.getText().toString(), email.getText().toString(), code.getText().toString()));
+        addButton(registerTools, "返回登录", v -> { closeOpenDialogs(); showOnlineCenter(); });
+        box.addView(registerTools, new LinearLayout.LayoutParams(-1, dp(62)));
+
+        ScrollView scroll = new ScrollView(this);
+        scroll.setFillViewport(false);
+        scroll.addView(box);
+        animateChildrenStaggered(box);
+        showGlassDialog(new AlertDialog.Builder(this).setTitle("注册").setView(scroll).setPositiveButton("完成", null).create());
     }
 
     private boolean isOnlineLoggedIn() { return onlineToken != null && !onlineToken.trim().isEmpty(); }

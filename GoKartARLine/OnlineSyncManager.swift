@@ -227,23 +227,18 @@ struct OnlineCenterView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var loginName = ""
     @State private var loginPassword = ""
-    @State private var registerName = ""
-    @State private var registerPassword = ""
-    @State private var registerEmail = ""
-    @State private var registerCode = ""
+    @State private var showingRegister = false
     @State private var selectedLeaderboardTrack: OnlineTrackSummary?
 
     var body: some View {
         NavigationStack {
             Form {
-                serverSection
                 if online.isLoggedIn {
                     accountSection
                     uploadSection
                     shareSection
                 } else {
                     loginSection
-                    registerSection
                 }
             }
             .scrollContentBackground(.hidden)
@@ -272,49 +267,28 @@ struct OnlineCenterView: View {
                 LeaderboardSheet(track: track)
                     .environmentObject(online)
             }
+            .sheet(isPresented: $showingRegister) {
+                OnlineRegisterView()
+                    .environmentObject(online)
+            }
         }
         .background(.black)
     }
 
-    private var serverSection: some View {
-        Section(header: Text("服务器")) {
-            TextField("Base URL", text: $online.baseURLString)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .liquidGlassControl()
-            Button("保存服务器地址") { online.saveBaseURL() }
-            if online.isBusy { ProgressView("处理中") }
-        }
-    }
-
     private var loginSection: some View {
         Section(header: Text("登录")) {
+            Text("使用用户名或邮箱登录。没有账号时进入注册页填写邮箱验证码。")
+                .font(.caption)
+                .foregroundStyle(.secondary)
             TextField("用户名或邮箱", text: $loginName)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
             SecureField("密码", text: $loginPassword)
-            Button("登录") { Task { await online.login(login: loginName, password: loginPassword) } }
-        }
-    }
-
-    private var registerSection: some View {
-        Section(header: Text("注册")) {
-            TextField("用户名", text: $registerName)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-            TextField("邮箱", text: $registerEmail)
-                .textInputAutocapitalization(.never)
-                .keyboardType(.emailAddress)
-                .autocorrectionDisabled()
-            SecureField("密码", text: $registerPassword)
             HStack {
-                TextField("验证码", text: $registerCode)
-                    .keyboardType(.numberPad)
-                Button("获取验证码") { Task { await online.requestCode(email: registerEmail) } }
+                Button("登录") { Task { await online.login(login: loginName, password: loginPassword) } }
+                Button("注册账号") { showingRegister = true }
             }
-            Button("注册并登录") {
-                Task { await online.register(username: registerName, password: registerPassword, email: registerEmail, code: registerCode) }
-            }
+            if online.isBusy { ProgressView("处理中") }
         }
     }
 
@@ -370,6 +344,59 @@ struct OnlineCenterView: View {
                 .padding(.vertical, 4)
             }
         }
+    }
+}
+
+private struct OnlineRegisterView: View {
+    @EnvironmentObject private var online: OnlineSyncManager
+    @Environment(\.dismiss) private var dismiss
+    @State private var username = ""
+    @State private var password = ""
+    @State private var email = ""
+    @State private var code = ""
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section(header: Text("注册账号")) {
+                    Text("像网站注册一样填写用户名、邮箱、密码，再通过邮件验证码完成注册。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    TextField("用户名", text: $username)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                    TextField("邮箱", text: $email)
+                        .textInputAutocapitalization(.never)
+                        .keyboardType(.emailAddress)
+                        .autocorrectionDisabled()
+                    SecureField("密码", text: $password)
+                    HStack {
+                        TextField("邮箱验证码", text: $code)
+                            .keyboardType(.numberPad)
+                        Button("获取验证码") { Task { await online.requestCode(email: email) } }
+                    }
+                    Button("完成注册") {
+                        Task {
+                            await online.register(username: username, password: password, email: email, code: code)
+                            if online.isLoggedIn { dismiss() }
+                        }
+                    }
+                    if online.isBusy { ProgressView("处理中") }
+                }
+            }
+            .scrollContentBackground(.hidden)
+            .background(.black)
+            .tint(.white)
+            .navigationTitle("注册")
+            .toolbar { ToolbarItem(placement: .navigationBarTrailing) { Button("返回登录") { dismiss() } } }
+            .buttonStyle(.liquidGlass)
+            .alert("在线", isPresented: Binding(get: { online.message != nil }, set: { if !$0 { online.message = nil } })) {
+                Button("知道了", role: .cancel) {}
+            } message: {
+                Text(online.message ?? "")
+            }
+        }
+        .background(.black)
     }
 }
 
