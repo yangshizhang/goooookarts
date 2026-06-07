@@ -2,9 +2,7 @@ import SwiftUI
 
 extension View {
     func liquidGlassControl(cornerRadius: CGFloat = 14) -> some View {
-        padding(.vertical, 6)
-            .padding(.horizontal, 10)
-            .modifier(LiquidGlassPanelModifier(cornerRadius: cornerRadius, isProminent: false))
+        modifier(AdaptiveLiquidGlassControlModifier(cornerRadius: cornerRadius))
     }
 }
 
@@ -17,14 +15,17 @@ struct LiquidGlassButtonStyle: ButtonStyle {
     var isProminent = false
 
     func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.headline)
-            .padding(.vertical, 10)
-            .padding(.horizontal, 14)
-            .modifier(LiquidGlassPanelModifier(cornerRadius: 18, isProminent: isProminent))
-            .scaleEffect(configuration.isPressed ? 0.96 : 1)
-            .brightness(configuration.isPressed ? -0.08 : 0)
-            .animation(.spring(response: 0.22, dampingFraction: 0.78), value: configuration.isPressed)
+        Group {
+            #if compiler(>=6.2)
+            if #available(iOS 26.0, *) {
+                OfficialLiquidGlassButtonBody(configuration: configuration, isProminent: isProminent)
+            } else {
+                LegacyAppleButtonBody(configuration: configuration, isProminent: isProminent)
+            }
+            #else
+            LegacyAppleButtonBody(configuration: configuration, isProminent: isProminent)
+            #endif
+        }
     }
 }
 
@@ -33,77 +34,91 @@ struct LiquidGlassPanelModifier: ViewModifier {
     var isProminent = false
 
     func body(content: Content) -> some View {
-        content
-            .foregroundStyle(.white)
-            .background {
-                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .fill(.ultraThinMaterial)
-                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .fill(surfaceGradient)
-                    .blendMode(.plusLighter)
-                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .strokeBorder(edgeGradient, lineWidth: isProminent ? 1.25 : 1)
-                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .inset(by: 1.5)
-                    .strokeBorder(innerHighlight, lineWidth: 0.75)
-                GeometryReader { proxy in
-                    let width = proxy.size.width
-                    let height = proxy.size.height
-                    Capsule()
-                        .fill(.white.opacity(isProminent ? 0.42 : 0.30))
-                        .frame(width: max(width * 0.45, 24), height: max(height * 0.16, 5))
-                        .blur(radius: 5)
-                        .offset(x: width * 0.11, y: height * 0.10)
-                    Capsule()
-                        .fill(.cyan.opacity(isProminent ? 0.24 : 0.12))
-                        .frame(width: max(width * 0.28, 18), height: max(height * 0.12, 4))
-                        .blur(radius: 7)
-                        .offset(x: width * 0.58, y: height * 0.64)
-                }
-                .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-                .allowsHitTesting(false)
+        Group {
+            #if compiler(>=6.2)
+            if #available(iOS 26.0, *) {
+                content
+                    .glassEffect(in: .rect(cornerRadius: cornerRadius))
+            } else {
+                legacyPanel(content)
             }
-            .shadow(color: .white.opacity(isProminent ? 0.16 : 0.10), radius: 1, x: 0, y: -1)
-            .shadow(color: .cyan.opacity(isProminent ? 0.22 : 0.10), radius: 10, x: 0, y: 4)
-            .shadow(color: .black.opacity(0.42), radius: 14, x: 0, y: 10)
-            .compositingGroup()
+            #else
+            legacyPanel(content)
+            #endif
+        }
     }
 
-    private var surfaceGradient: LinearGradient {
-        LinearGradient(
-            colors: [
-                .white.opacity(isProminent ? 0.42 : 0.28),
-                .white.opacity(isProminent ? 0.16 : 0.10),
-                .cyan.opacity(isProminent ? 0.16 : 0.08),
-                .white.opacity(isProminent ? 0.22 : 0.12)
-            ],
-            startPoint: .topLeading,
-            endPoint: .bottomTrailing
-        )
-    }
-
-    private var edgeGradient: LinearGradient {
-        LinearGradient(
-            colors: [
-                .white.opacity(isProminent ? 0.90 : 0.70),
-                .white.opacity(isProminent ? 0.30 : 0.22),
-                .cyan.opacity(isProminent ? 0.42 : 0.24),
-                .white.opacity(isProminent ? 0.55 : 0.36)
-            ],
-            startPoint: .topLeading,
-            endPoint: .bottomTrailing
-        )
-    }
-
-    private var innerHighlight: LinearGradient {
-        LinearGradient(
-            colors: [
-                .white.opacity(isProminent ? 0.54 : 0.38),
-                .clear,
-                .white.opacity(isProminent ? 0.24 : 0.14)
-            ],
-            startPoint: .top,
-            endPoint: .bottom
-        )
+    private func legacyPanel(_ content: Content) -> some View {
+        content
+            .foregroundStyle(.primary)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .strokeBorder(.white.opacity(isProminent ? 0.22 : 0.12), lineWidth: 1)
+            }
     }
 }
+
+private struct AdaptiveLiquidGlassControlModifier: ViewModifier {
+    var cornerRadius: CGFloat
+
+    func body(content: Content) -> some View {
+        Group {
+            #if compiler(>=6.2)
+            if #available(iOS 26.0, *) {
+                content
+                    .padding(.vertical, 6)
+                    .padding(.horizontal, 10)
+                    .glassEffect(in: .rect(cornerRadius: cornerRadius))
+            } else {
+                content
+            }
+            #else
+            content
+            #endif
+        }
+    }
+}
+
+private struct LegacyAppleButtonBody: View {
+    var configuration: ButtonStyle.Configuration
+    var isProminent: Bool
+
+    var body: some View {
+        configuration.label
+            .font(.headline)
+            .padding(.vertical, 9)
+            .padding(.horizontal, 14)
+            .foregroundStyle(isProminent ? .white : .accentColor)
+            .background {
+                if isProminent {
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(Color.accentColor)
+                } else {
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .strokeBorder(Color.accentColor.opacity(0.45), lineWidth: 1)
+                }
+            }
+            .opacity(configuration.isPressed ? 0.65 : 1)
+            .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
+    }
+}
+
+#if compiler(>=6.2)
+@available(iOS 26.0, *)
+private struct OfficialLiquidGlassButtonBody: View {
+    var configuration: ButtonStyle.Configuration
+    var isProminent: Bool
+
+    var body: some View {
+        configuration.label
+            .font(.headline)
+            .padding(.vertical, 10)
+            .padding(.horizontal, 14)
+            .foregroundStyle(.white)
+            .glassEffect(isProminent ? .regular.tint(.white.opacity(0.20)).interactive() : .regular.interactive(), in: .rect(cornerRadius: 18))
+            .scaleEffect(configuration.isPressed ? 0.96 : 1)
+            .animation(.spring(response: 0.22, dampingFraction: 0.78), value: configuration.isPressed)
+    }
+}
+#endif

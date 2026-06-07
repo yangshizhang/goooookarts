@@ -1,6 +1,7 @@
 package com.example.gokartarline;
 
 import android.Manifest;
+import android.animation.*;
 import android.app.*;
 import android.content.*;
 import android.content.pm.PackageManager;
@@ -18,6 +19,7 @@ import android.os.*;
 import android.text.InputType;
 import android.util.Base64;
 import android.view.*;
+import android.view.animation.*;
 import android.widget.*;
 import org.json.*;
 import java.io.*;
@@ -149,6 +151,7 @@ public class MainActivity extends Activity {
         barParams.setMargins(dp(18), dp(18), dp(18), dp(18));
         rootView.addView(bar, barParams);
         setContentView(rootView);
+        animateChildrenStaggered(bar);
         updateHud();
     }
 
@@ -198,9 +201,42 @@ public class MainActivity extends Activity {
         return new GlassPanelDrawable(dp(radiusDp), alpha);
     }
 
+    private Drawable mnsjGlowBackground(String coreColorHex, float cornerRadiusDp, int strokeWidthDp, String strokeColorHex) {
+        int glowWidth = dp(7);
+        int layersCount = 4;
+        Drawable[] layers = new Drawable[layersCount + 1];
+        float radius = dp(cornerRadiusDp);
+        for (int i = 0; i < layersCount; i++) {
+            GradientDrawable glowLayer = new GradientDrawable();
+            glowLayer.setColor(Color.argb((int) (255 * (0.015f + 0.01f * i)), 220, 230, 245));
+            glowLayer.setCornerRadius(radius + (layersCount - i) * dp(1.5f));
+            layers[i] = glowLayer;
+        }
+        GradientDrawable core = new GradientDrawable();
+        core.setColor(Color.parseColor(coreColorHex));
+        core.setCornerRadius(radius);
+        if (strokeWidthDp > 0) core.setStroke(dp(strokeWidthDp), Color.parseColor(strokeColorHex));
+        layers[layersCount] = core;
+        LayerDrawable layerDrawable = new LayerDrawable(layers);
+        for (int i = 0; i < layersCount; i++) {
+            int inset = (int) (glowWidth * ((float) i / layersCount));
+            layerDrawable.setLayerInset(i, inset, inset, inset, inset);
+        }
+        layerDrawable.setLayerInset(layersCount, glowWidth, glowWidth, glowWidth, glowWidth);
+        return layerDrawable;
+    }
+
+    private Drawable mnsjButtonBackground(boolean pressed) {
+        return mnsjGlowBackground(pressed ? "#242424" : "#151515", 25, 1, pressed ? "#9C5F54" : "#2C2C2C");
+    }
+
+    private Drawable mnsjControlBackground() {
+        return mnsjGlowBackground("#1C1C1C", 24, 1, "#333333");
+    }
+
     private LinearLayout glassContainer(float radiusDp, int alpha) {
         LinearLayout layout = new LinearLayout(this);
-        layout.setBackground(glassPanel(radiusDp, alpha));
+        layout.setBackground(mnsjGlowBackground("#151515", radiusDp, 1, "#2C2C2C"));
         layout.setElevation(dp(10));
         return layout;
     }
@@ -209,14 +245,23 @@ public class MainActivity extends Activity {
         button.setAllCaps(false);
         button.setTextColor(Color.WHITE);
         button.setTextSize(14);
+        button.setTypeface(Typeface.DEFAULT_BOLD);
         button.setMinHeight(dp(48));
         button.setMinWidth(dp(108));
         button.setPadding(dp(18), 0, dp(18), 0);
         StateListDrawable states = new StateListDrawable();
-        states.addState(new int[]{android.R.attr.state_pressed}, glassPanel(999, 42));
-        states.addState(new int[]{}, glassPanel(999, 14));
+        states.addState(new int[]{android.R.attr.state_pressed}, mnsjButtonBackground(true));
+        states.addState(new int[]{}, mnsjButtonBackground(false));
         button.setBackground(states);
-        button.setElevation(dp(6));
+        button.setElevation(dp(12));
+        button.setOnTouchListener((view, event) -> {
+            if (event.getAction() == MotionEvent.ACTION_DOWN) {
+                view.animate().scaleX(0.94f).scaleY(0.94f).alpha(0.86f).setDuration(90).setInterpolator(new DecelerateInterpolator()).start();
+            } else if (event.getAction() == MotionEvent.ACTION_UP || event.getAction() == MotionEvent.ACTION_CANCEL) {
+                view.animate().scaleX(1f).scaleY(1f).alpha(1f).setDuration(180).setInterpolator(new OvershootInterpolator(1.4f)).start();
+            }
+            return false;
+        });
     }
 
     private AlertDialog showGlassDialog(AlertDialog dialog) {
@@ -227,8 +272,9 @@ public class MainActivity extends Activity {
                 window.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
                 View decor = window.getDecorView();
                 decor.setPadding(dp(12), dp(12), dp(12), dp(12));
-                decor.setBackground(glassPanel(36, 24));
-                decor.setElevation(dp(16));
+                decor.setBackground(mnsjGlowBackground("#1A1A1A", 36, 1, "#2A2A2A"));
+                decor.setElevation(dp(22));
+                animateDialogIn(decor);
             }
             Button positive = dialog.getButton(AlertDialog.BUTTON_POSITIVE);
             Button negative = dialog.getButton(AlertDialog.BUTTON_NEGATIVE);
@@ -243,10 +289,56 @@ public class MainActivity extends Activity {
         return dialog;
     }
 
+    private void animateDialogIn(View view) {
+        view.setAlpha(0f);
+        view.setScaleX(0.72f);
+        view.setScaleY(0.72f);
+        view.setRotationX(-18f);
+        view.setCameraDistance(8000 * getResources().getDisplayMetrics().density);
+        AnimatorSet set = new AnimatorSet();
+        set.playTogether(
+                ObjectAnimator.ofFloat(view, "alpha", 0f, 1f),
+                ObjectAnimator.ofFloat(view, "scaleX", 0.72f, 1f),
+                ObjectAnimator.ofFloat(view, "scaleY", 0.72f, 1f),
+                ObjectAnimator.ofFloat(view, "rotationX", -18f, 0f));
+        set.setDuration(520);
+        set.setInterpolator(new OvershootInterpolator(1.15f));
+        set.start();
+    }
+
+    private void animateChildrenStaggered(ViewGroup parent) {
+        parent.post(() -> {
+            for (int i = 0; i < parent.getChildCount(); i++) {
+                View child = parent.getChildAt(i);
+                child.setAlpha(0f);
+                child.setTranslationX(dp(80));
+                child.setScaleX(0.96f);
+                child.setScaleY(0.96f);
+                child.animate()
+                        .translationX(0f)
+                        .alpha(1f)
+                        .scaleX(1f)
+                        .scaleY(1f)
+                        .setStartDelay(i * 45L)
+                        .setDuration(280)
+                        .setInterpolator(new DecelerateInterpolator(1.6f))
+                        .start();
+            }
+        });
+    }
+
+    private LayoutTransition mnsjLayoutTransition() {
+        LayoutTransition transition = new LayoutTransition();
+        transition.enableTransitionType(LayoutTransition.CHANGING);
+        transition.setDuration(240);
+        return transition;
+    }
+
     private LinearLayout glassDialogBox() {
         LinearLayout box = glassContainer(32, 14);
         box.setOrientation(LinearLayout.VERTICAL);
         box.setPadding(dp(24), dp(18), dp(24), dp(12));
+        box.setLayoutTransition(mnsjLayoutTransition());
         return box;
     }
 
@@ -548,6 +640,7 @@ public class MainActivity extends Activity {
             box.addView(registerTools, new LinearLayout.LayoutParams(-1, dp(62)));
         }
         showGlassDialog(new AlertDialog.Builder(this).setTitle("在线").setView(box).setPositiveButton("完成", null).create());
+        animateChildrenStaggered(box);
     }
 
     private boolean isOnlineLoggedIn() { return onlineToken != null && !onlineToken.trim().isEmpty(); }
@@ -638,7 +731,12 @@ public class MainActivity extends Activity {
             row.setOrientation(LinearLayout.HORIZONTAL);
             row.setGravity(Gravity.CENTER_VERTICAL);
             row.setPadding(dp(12), dp(8), dp(12), dp(8));
-            row.setBackground(glassPanel(14, 12));
+            row.setBackground(mnsjGlowBackground("#1C1C1C", 24, 1, "#333333"));
+            row.setOnTouchListener((view, event) -> {
+                if (event.getAction() == MotionEvent.ACTION_DOWN) view.animate().scaleX(0.985f).scaleY(0.985f).alpha(0.92f).setDuration(90).start();
+                else if (event.getAction() == MotionEvent.ACTION_UP || event.getAction() == MotionEvent.ACTION_CANCEL) view.animate().scaleX(1f).scaleY(1f).alpha(1f).setDuration(180).setInterpolator(new OvershootInterpolator(1.2f)).start();
+                return false;
+            });
             LinearLayout texts = new LinearLayout(this);
             texts.setOrientation(LinearLayout.VERTICAL);
             TextView title = label(name);
@@ -657,6 +755,7 @@ public class MainActivity extends Activity {
         }
         scroll.addView(rows);
         box.addView(scroll, new LinearLayout.LayoutParams(-1, dp(430)));
+        animateChildrenStaggered(rows);
         showGlassDialog(new AlertDialog.Builder(this).setTitle("分享页").setView(box).setPositiveButton("完成", null).create());
     }
 
@@ -695,6 +794,7 @@ public class MainActivity extends Activity {
                 box.addView(row);
             }
         }
+        animateChildrenStaggered(box);
         showGlassDialog(new AlertDialog.Builder(this).setTitle(trackName + " 排行榜").setView(box).setPositiveButton("完成", null).create());
     }
 
@@ -803,6 +903,7 @@ public class MainActivity extends Activity {
         for (int i = 0; i < tracks.size(); i++) rows.addView(trackRow(i));
         scroll.addView(rows);
         box.addView(scroll, new LinearLayout.LayoutParams(-1, dp(360)));
+        animateChildrenStaggered(rows);
         showGlassDialog(new AlertDialog.Builder(this).setTitle("已导入赛道").setView(box).setPositiveButton("完成", null).create());
     }
 
@@ -817,7 +918,15 @@ public class MainActivity extends Activity {
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setGravity(Gravity.CENTER_VERTICAL);
         row.setPadding(dp(12), dp(8), dp(12), dp(8));
-        row.setBackground(glassPanel(14, selectedTrack == index ? 28 : 12));
+        row.setBackground(mnsjGlowBackground(selectedTrack == index ? "#242424" : "#1C1C1C", 24, 1, selectedTrack == index ? "#9C5F54" : "#333333"));
+        row.setOnTouchListener((view, event) -> {
+            if (event.getAction() == MotionEvent.ACTION_DOWN) {
+                view.animate().scaleX(0.985f).scaleY(0.985f).alpha(0.92f).setDuration(90).start();
+            } else if (event.getAction() == MotionEvent.ACTION_UP || event.getAction() == MotionEvent.ACTION_CANCEL) {
+                view.animate().scaleX(1f).scaleY(1f).alpha(1f).setDuration(180).setInterpolator(new OvershootInterpolator(1.2f)).start();
+            }
+            return false;
+        });
         LinearLayout texts = new LinearLayout(this);
         texts.setOrientation(LinearLayout.VERTICAL);
         TextView name = label(track.name);
@@ -841,7 +950,7 @@ public class MainActivity extends Activity {
     }
 
     private void renameSelected() { if (selectedTrack >= 0) renameTrack(selectedTrack); }
-    private void renameTrack(int index) { if (index < 0 || index >= tracks.size()) return; EditText input = new EditText(this); input.setText(tracks.get(index).name); input.setTextColor(Color.WHITE); input.setHintTextColor(0xAAFFFFFF); input.setBackground(glassPanel(14, 18)); showGlassDialog(new AlertDialog.Builder(this).setTitle("重命名赛道").setView(input).setPositiveButton("保存", (d, w) -> { tracks.get(index).name = input.getText().toString().trim(); saveTracks(); selectTrack(index); }).setNegativeButton("取消", null).create()); }
+    private void renameTrack(int index) { if (index < 0 || index >= tracks.size()) return; EditText input = new EditText(this); input.setText(tracks.get(index).name); input.setTextColor(Color.WHITE); input.setHintTextColor(0xAAFFFFFF); input.setBackground(mnsjControlBackground()); showGlassDialog(new AlertDialog.Builder(this).setTitle("重命名赛道").setView(input).setPositiveButton("保存", (d, w) -> { tracks.get(index).name = input.getText().toString().trim(); saveTracks(); selectTrack(index); }).setNegativeButton("取消", null).create()); }
     private void deleteSelected() { if (selectedTrack >= 0) deleteTrack(selectedTrack); }
     private void deleteTrack(int index) { if (index < 0 || index >= tracks.size()) return; tracks.remove(index); selectedTrack = Math.min(index, tracks.size() - 1); saveTracks(); if (selectedTrack >= 0) selectTrack(selectedTrack); else overlay.setTrack(new ArrayList<>()); updateHud(); toast("已删除"); }
 
@@ -857,7 +966,7 @@ public class MainActivity extends Activity {
         box.addView(direction);
         SeekBar heading = new SeekBar(this);
         heading.setMax(359);
-        heading.setBackground(glassPanel(14, 14));
+        heading.setBackground(mnsjControlBackground());
         heading.setPadding(dp(10), dp(6), dp(10), dp(6));
         heading.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) { canvas.headingDegrees = progress; direction.setText("方向 " + progress + "°"); canvas.invalidate(); }
@@ -867,6 +976,7 @@ public class MainActivity extends Activity {
         box.addView(heading, new LinearLayout.LayoutParams(-1, dp(48)));
         TextView point = label("当前位置点：#1 / " + tracks.get(index).points.size());
         box.addView(point);
+        animateChildrenStaggered(box);
         showGlassDialog(new AlertDialog.Builder(this).setTitle("校准地图").setView(box).setPositiveButton("加载赛道并应用校准", (d, w) -> { selectTrack(index); toast("已按地图选择校准位置和方向"); }).setNegativeButton("取消", null).create());
     }
 
@@ -893,6 +1003,7 @@ public class MainActivity extends Activity {
         TextView safety = label("请只在封闭赛道使用。手机必须固定牢靠，AR提示不能替代驾驶判断。");
         safety.setTextColor(Color.argb(180, 255, 255, 255));
         box.addView(safety);
+        animateChildrenStaggered(box);
         showGlassDialog(new AlertDialog.Builder(this).setTitle("设置").setView(box).setPositiveButton("完成", (d, w) -> {
             lineOpacity = (15 + opacity.getProgress()) / 100.0;
             lineWidth = (20 + width.getProgress()) / 100.0;
@@ -934,34 +1045,43 @@ public class MainActivity extends Activity {
         bar.setMax(max - min);
         bar.setProgress(Math.max(0, Math.min(max - min, value - min)));
         bar.setPadding(dp(10), dp(6), dp(10), dp(6));
-        bar.setBackground(glassPanel(14, 14));
+        bar.setBackground(mnsjControlBackground());
         box.addView(bar, new LinearLayout.LayoutParams(-1, dp(46)));
         return bar;
     }
 
     private CheckBox addCheckBox(LinearLayout box, String text, boolean checked) {
-        CheckBox check = new CheckBox(this);
+        CheckBox check = new AnimatedSwitchCheckBox(this);
         check.setText(text);
         check.setTextColor(Color.WHITE);
         check.setTextSize(16);
         check.setChecked(checked);
-        check.setBackground(glassPanel(14, 14));
-        check.setPadding(dp(10), dp(6), dp(10), dp(6));
-        box.addView(check, new LinearLayout.LayoutParams(-1, dp(48)));
+        check.setBackground(mnsjControlBackground());
+        check.setPadding(dp(14), dp(6), dp(78), dp(6));
+        box.addView(check, new LinearLayout.LayoutParams(-1, dp(54)));
         return check;
     }
 
     private RadioGroup radioGroup(String[] labels, int checkedIndex) {
         RadioGroup group = new RadioGroup(this);
         group.setOrientation(RadioGroup.HORIZONTAL);
-        group.setBackground(glassPanel(14, 14));
+        group.setBackground(mnsjControlBackground());
         group.setPadding(dp(8), dp(4), dp(8), dp(4));
+        group.setLayoutTransition(mnsjLayoutTransition());
         for (int i = 0; i < labels.length; i++) {
             RadioButton item = new RadioButton(this);
             item.setText(labels[i]);
             item.setTextColor(Color.WHITE);
             item.setTextSize(15);
             item.setId(View.generateViewId());
+            item.setButtonDrawable(null);
+            item.setGravity(Gravity.CENTER);
+            item.setBackground(mnsjButtonBackground(false));
+            item.setOnTouchListener((view, event) -> {
+                if (event.getAction() == MotionEvent.ACTION_DOWN) view.animate().scaleX(0.96f).scaleY(0.96f).setDuration(80).start();
+                else if (event.getAction() == MotionEvent.ACTION_UP || event.getAction() == MotionEvent.ACTION_CANCEL) view.animate().scaleX(1f).scaleY(1f).setDuration(170).setInterpolator(new OvershootInterpolator(1.25f)).start();
+                return false;
+            });
             RadioGroup.LayoutParams itemParams = new RadioGroup.LayoutParams(0, dp(46));
             itemParams.weight = 1;
             group.addView(item, itemParams);
@@ -1023,6 +1143,13 @@ public class MainActivity extends Activity {
         });
         root.addView(generate, new LinearLayout.LayoutParams(-1, dp(58)));
         setContentView(root);
+        root.post(() -> {
+            root.setAlpha(0f);
+            root.setScaleX(0.96f);
+            root.setScaleY(0.96f);
+            root.animate().alpha(1f).scaleX(1f).scaleY(1f).setDuration(320).setInterpolator(new DecelerateInterpolator(1.4f)).start();
+            animateChildrenStaggered(root);
+        });
     }
 
     private EditText aiField(String hint, String value, boolean secure) {
@@ -1032,7 +1159,7 @@ public class MainActivity extends Activity {
         input.setSingleLine(true);
         input.setTextColor(Color.WHITE);
         input.setHintTextColor(0xAAFFFFFF);
-        input.setBackground(glassPanel(12, 14));
+        input.setBackground(mnsjControlBackground());
         input.setPadding(dp(12), 0, dp(12), 0);
         if (secure) input.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, dp(54));
@@ -1104,7 +1231,7 @@ public class MainActivity extends Activity {
             search.setSingleLine(true);
             search.setTextColor(Color.WHITE);
             search.setHintTextColor(0xAAFFFFFF);
-            search.setBackground(glassPanel(999, 14));
+            search.setBackground(mnsjControlBackground());
             search.setPadding(dp(12), 0, dp(12), 0);
             Button find = addButton(top, "搜索", v -> searchPlace());
             top.addView(search, 0, new LinearLayout.LayoutParams(0, dp(52), 1));
@@ -1133,6 +1260,13 @@ public class MainActivity extends Activity {
             applyGlassButton(ai);
             ai.setOnClickListener(v -> generateFromDrawing());
             addView(ai, new LinearLayout.LayoutParams(-1, dp(58)));
+            post(() -> {
+                setAlpha(0f);
+                setScaleX(0.96f);
+                setScaleY(0.96f);
+                animate().alpha(1f).scaleX(1f).scaleY(1f).setDuration(320).setInterpolator(new DecelerateInterpolator(1.4f)).start();
+                animateChildrenStaggered(this);
+            });
         }
 
         void searchPlace() { try { List<Address> list = new Geocoder(MainActivity.this).getFromLocationName(search.getText().toString(), 1); if (list != null && !list.isEmpty()) { canvas.centerLat = list.get(0).getLatitude(); canvas.centerLon = list.get(0).getLongitude(); message.setText("已定位到：" + (list.get(0).getFeatureName() == null ? search.getText().toString() : list.get(0).getFeatureName()) + "。切到绘制模式后描出赛道。"); } } catch (Exception e) { toast("搜索失败：" + e.getMessage()); } }
@@ -1377,6 +1511,69 @@ public class MainActivity extends Activity {
 
     private static final String IMAGE_TRACK_PROMPT = "你是专业卡丁车赛道分析AI。识别完整闭环赛道，按外-内-外原则生成平滑行车线，点间距约0.5米。只输出纯JSON，字段为trackName、trackLength、cornerCount、trackDescription、drivingTips、points。points每项包含x、y、speed、color、remark，color只能是green/orange/red。禁止输出JSON以外文字。";
     private static final String MAP_BRAKE_ZONE_PROMPT = "你是专业卡丁车赛道工程师。用户已经在地图实景底图上画出首尾相接的赛道中心线。保留整体形状，重采样约0.5米间距，生成speed和color，green=全油门，orange=松油，red=刹车区。只输出纯JSON，字段为trackName、trackLength、cornerCount、points；points每项包含latitude、longitude、speed、color、remark。禁止输出JSON以外文字。";
+
+    final class AnimatedSwitchCheckBox extends CheckBox {
+        final Paint switchPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        float knobProgress = 0f;
+        ValueAnimator animator;
+
+        AnimatedSwitchCheckBox(Context context) {
+            super(context);
+            setButtonDrawable(null);
+            setGravity(Gravity.CENTER_VERTICAL);
+            setSingleLine(true);
+            setIncludeFontPadding(false);
+            setTypeface(Typeface.DEFAULT_BOLD);
+        }
+
+        @Override public void setChecked(boolean checked) {
+            boolean changed = checked != isChecked();
+            super.setChecked(checked);
+            float target = checked ? 1f : 0f;
+            if (!changed || !isAttachedToWindow()) {
+                knobProgress = target;
+                invalidate();
+                return;
+            }
+            if (animator != null) animator.cancel();
+            animator = ValueAnimator.ofFloat(knobProgress, target);
+            animator.setDuration(250);
+            animator.setInterpolator(new OvershootInterpolator(1.0f));
+            animator.addUpdateListener(animation -> {
+                knobProgress = (float) animation.getAnimatedValue();
+                invalidate();
+            });
+            animator.start();
+        }
+
+        @Override protected void onDraw(Canvas canvas) {
+            super.onDraw(canvas);
+            float density = getResources().getDisplayMetrics().density;
+            float switchWidth = 48f * density;
+            float switchHeight = 26f * density;
+            float knobSize = 22f * density;
+            float right = getWidth() - 18f * density;
+            float left = right - switchWidth;
+            float top = (getHeight() - switchHeight) / 2f;
+            RectF track = new RectF(left, top, right, top + switchHeight);
+            int off = Color.parseColor("#333333");
+            int on = Color.parseColor("#9C5F54");
+            switchPaint.setStyle(Paint.Style.FILL);
+            switchPaint.setColor(blendColor(off, on, Math.max(0f, Math.min(1f, knobProgress))));
+            canvas.drawRoundRect(track, switchHeight / 2f, switchHeight / 2f, switchPaint);
+            switchPaint.setColor(Color.WHITE);
+            float knobLeft = left + 2f * density + (switchWidth - knobSize - 4f * density) * knobProgress;
+            canvas.drawOval(new RectF(knobLeft, top + 2f * density, knobLeft + knobSize, top + 2f * density + knobSize), switchPaint);
+        }
+
+        int blendColor(int from, int to, float progress) {
+            int a = (int) (Color.alpha(from) + (Color.alpha(to) - Color.alpha(from)) * progress);
+            int r = (int) (Color.red(from) + (Color.red(to) - Color.red(from)) * progress);
+            int g = (int) (Color.green(from) + (Color.green(to) - Color.green(from)) * progress);
+            int b = (int) (Color.blue(from) + (Color.blue(to) - Color.blue(from)) * progress);
+            return Color.argb(a, r, g, b);
+        }
+    }
 
     static final class GlassPanelDrawable extends Drawable {
         private final float radius;
