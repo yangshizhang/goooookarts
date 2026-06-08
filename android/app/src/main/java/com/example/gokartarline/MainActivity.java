@@ -1221,9 +1221,18 @@ public class MainActivity extends Activity {
         root.addView(photo, new LinearLayout.LayoutParams(-1, dp(56)));
         EditText name = aiField("赛道名称", "图片描线赛道", false);
         EditText length = aiField("赛道长度米（不知道填800）", prefs.getString("imageTrackLength", "800"), false);
+        EditText width = aiField("整体宽米", prefs.getString("imageTrackWidth", ""), false);
+        EditText height = aiField("整体高米", prefs.getString("imageTrackHeight", ""), false);
         length.setInputType(InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_FLAG_DECIMAL);
+        width.setInputType(InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_FLAG_DECIMAL);
+        height.setInputType(InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_FLAG_DECIMAL);
         root.addView(name);
-        root.addView(length);
+        LinearLayout dimensions = new LinearLayout(this);
+        dimensions.setOrientation(LinearLayout.HORIZONTAL);
+        dimensions.addView(length, new LinearLayout.LayoutParams(0, dp(54), 1));
+        dimensions.addView(width, new LinearLayout.LayoutParams(0, dp(54), 1));
+        dimensions.addView(height, new LinearLayout.LayoutParams(0, dp(54), 1));
+        root.addView(dimensions);
         LinearLayout traceTools = new LinearLayout(this);
         traceTools.setGravity(Gravity.CENTER);
         addButton(traceTools, "撤销", v -> { if (!aiDrawnPoints.isEmpty()) { aiDrawnPoints.remove(aiDrawnPoints.size() - 1); updateAITraceMessage(); if (aiImageView != null) aiImageView.invalidate(); } });
@@ -1233,15 +1242,19 @@ public class MainActivity extends Activity {
         LinearLayout.LayoutParams imageLp = new LinearLayout.LayoutParams(-1, 0, 1);
         imageLp.setMargins(0, dp(12), 0, dp(8));
         root.addView(aiImageView, imageLp);
-        aiMessage = label("选择赛道俯视图，然后沿赛道中心线手指描一圈。");
+        aiMessage = label("选择赛道俯视图，比例不准时填写整体宽高，然后沿中心线描一圈。");
         aiMessage.setTextColor(Color.argb(190, 255, 255, 255));
         root.addView(aiMessage);
         Button generate = new Button(this);
         generate.setText("按描线生成并导入");
         applyGlassButton(generate);
         generate.setOnClickListener(v -> {
-            prefs.edit().putString("imageTrackLength", length.getText().toString()).apply();
-            generateImageTraceTrack(name.getText().toString(), length.getText().toString());
+            prefs.edit()
+                    .putString("imageTrackLength", length.getText().toString())
+                    .putString("imageTrackWidth", width.getText().toString())
+                    .putString("imageTrackHeight", height.getText().toString())
+                    .apply();
+            generateImageTraceTrack(name.getText().toString(), length.getText().toString(), width.getText().toString(), height.getText().toString());
         });
         root.addView(generate, new LinearLayout.LayoutParams(-1, dp(58)));
         setContentView(root);
@@ -1281,22 +1294,33 @@ public class MainActivity extends Activity {
             selectedAIFinishPoint = null;
             aiDrawnPoints.clear();
             if (aiImageView != null) aiImageView.setImage(selectedAIImage);
-            if (aiMessage != null) aiMessage.setText("照片已选择。沿赛道中心线描一圈，首尾会自动闭合。");
+            if (aiMessage != null) aiMessage.setText("照片已选择。沿赛道中心线描一圈；图片比例不准时填写整体宽高。");
         } catch (Exception e) { toast("照片读取失败：" + e.getMessage()); }
     }
 
-    private void generateImageTraceTrack(String name, String lengthText) {
+    private void generateImageTraceTrack(String name, String lengthText, String widthText, String heightText) {
         if (selectedAIImage == null || aiDrawnPoints.size() < 8) { toast("请先选择照片并沿赛道描一圈"); return; }
         try {
             double length = Double.parseDouble(lengthText.trim().isEmpty() ? "800" : lengthText.trim());
             if (Double.isNaN(length) || Double.isInfinite(length) || length < 120) length = 800;
-            TrackData track = buildTrackFromImageTrace(name, length);
+            double width = parseOptionalMeters(widthText);
+            double height = parseOptionalMeters(heightText);
+            TrackData track = buildTrackFromImageTrace(name, length, width, height);
             addTrack(track);
             toast("已生成并导入：" + track.name);
             backHome();
         } catch (Exception e) {
             toast("描线生成失败：" + e.getMessage());
             if (aiMessage != null) aiMessage.setText("描线点太少或路径无效，请沿赛道中心线完整描一圈。");
+        }
+    }
+
+    private double parseOptionalMeters(String text) {
+        try {
+            double value = Double.parseDouble(text == null || text.trim().isEmpty() ? "0" : text.trim());
+            return Double.isNaN(value) || Double.isInfinite(value) || value <= 1 ? 0 : value;
+        } catch (Exception ignored) {
+            return 0;
         }
     }
 
@@ -1495,10 +1519,10 @@ public class MainActivity extends Activity {
 
     private void updateAITraceMessage() {
         if (aiMessage == null) return;
-        aiMessage.setText(aiDrawnPoints.isEmpty() ? "沿赛道中心线描一圈。" : "已记录 " + aiDrawnPoints.size() + " 个描线点。越贴近中心线，生成越准。");
+        aiMessage.setText(aiDrawnPoints.isEmpty() ? "沿赛道中心线描一圈。知道整体宽高时请填写，可自动修正图片比例。" : "已记录 " + aiDrawnPoints.size() + " 个描线点。越贴近中心线，生成越准。");
     }
 
-    private TrackData buildTrackFromImageTrace(String name, double targetLength) throws Exception {
+    private TrackData buildTrackFromImageTrace(String name, double targetLength, double targetWidth, double targetHeight) throws Exception {
         ArrayList<PointF> clean = new ArrayList<>();
         for (PointF point : aiDrawnPoints) {
             if (!clean.isEmpty() && Math.hypot(point.x - clean.get(clean.size() - 1).x, point.y - clean.get(clean.size() - 1).y) < 4) continue;
@@ -1510,11 +1534,25 @@ public class MainActivity extends Activity {
         if (Math.hypot(first.x - last.x, first.y - last.y) > 4) clean.add(new PointF(first.x, first.y));
         double pixelLength = imagePolylineLength(clean);
         double length = Math.max(targetLength, 120);
-        int sampleCount = Math.min(Math.max((int) (length / 3.0), 120), 500);
+        RectF bounds = imageTraceBounds(clean);
+        boolean hasDimensions = targetWidth > 1 && targetHeight > 1 && bounds.width() > 1 && bounds.height() > 1;
+        double scaleX;
+        double scaleY;
+        double scaledLength;
+        if (hasDimensions) {
+            scaleX = targetWidth / bounds.width();
+            scaleY = targetHeight / bounds.height();
+            scaledLength = Math.max(scaledImagePolylineLength(clean, scaleX, scaleY), 1);
+        } else {
+            double metersPerPixel = pixelLength > 1 ? length / pixelLength : 1;
+            scaleX = metersPerPixel;
+            scaleY = metersPerPixel;
+            scaledLength = length;
+        }
+        int sampleCount = Math.min(Math.max((int) (scaledLength / 3.0), 120), 500);
         ArrayList<PointF> sampled = new ArrayList<>();
-        for (int i = 0; i <= sampleCount; i++) sampled.add(imagePointOnPolyline(clean, pixelLength * i / sampleCount));
+        for (int i = 0; i <= sampleCount; i++) sampled.add(imagePointOnScaledPolyline(clean, scaledLength * i / sampleCount, scaleX, scaleY));
         ArrayList<String> colors = localImageTraceColors(sampled);
-        double metersPerPixel = pixelLength > 1 ? length / pixelLength : 1;
         PointF anchor = sampled.get(0);
         double originLat = latestLocation != null ? latestLocation.getLatitude() : 31.234567;
         double originLon = latestLocation != null ? latestLocation.getLongitude() : 121.345678;
@@ -1522,16 +1560,17 @@ public class MainActivity extends Activity {
         double lonScale = Math.max(Math.cos(Math.toRadians(originLat)) * 111320.0, 1);
         TrackData track = new TrackData();
         track.name = name.trim().isEmpty() ? "图片描线赛道" : name.trim();
-        track.length = length;
         int redCount = 0;
         for (int i = 0; i < sampled.size(); i++) {
             PointF point = sampled.get(i);
             String color = colors.get(i);
             if ("red".equals(color)) redCount++;
-            double east = (point.x - anchor.x) * metersPerPixel;
-            double north = -(point.y - anchor.y) * metersPerPixel;
+            double east = (point.x - anchor.x) * scaleX;
+            double north = -(point.y - anchor.y) * scaleY;
             track.points.add(new TrackPoint(originLat + north / latScale, originLon + east / lonScale, speedForColor(color), color));
         }
+        double measuredLength = computeLength(track.points);
+        track.length = measuredLength > 1 ? measuredLength : scaledLength;
         track.cornerCount = Math.max(1, redCount / 6);
         return track;
     }
@@ -1542,12 +1581,34 @@ public class MainActivity extends Activity {
         return total;
     }
 
-    private PointF imagePointOnPolyline(List<PointF> points, double distance) {
+    private RectF imageTraceBounds(List<PointF> points) {
+        RectF bounds = new RectF(points.get(0).x, points.get(0).y, points.get(0).x, points.get(0).y);
+        for (int i = 1; i < points.size(); i++) {
+            PointF point = points.get(i);
+            bounds.left = Math.min(bounds.left, point.x);
+            bounds.right = Math.max(bounds.right, point.x);
+            bounds.top = Math.min(bounds.top, point.y);
+            bounds.bottom = Math.max(bounds.bottom, point.y);
+        }
+        return bounds;
+    }
+
+    private double scaledImagePolylineLength(List<PointF> points, double scaleX, double scaleY) {
+        double total = 0;
+        for (int i = 1; i < points.size(); i++) {
+            double dx = (points.get(i).x - points.get(i - 1).x) * scaleX;
+            double dy = (points.get(i).y - points.get(i - 1).y) * scaleY;
+            total += Math.hypot(dx, dy);
+        }
+        return total;
+    }
+
+    private PointF imagePointOnScaledPolyline(List<PointF> points, double distance, double scaleX, double scaleY) {
         double travelled = 0;
         for (int i = 1; i < points.size(); i++) {
             PointF start = points.get(i - 1);
             PointF end = points.get(i);
-            double segment = Math.hypot(end.x - start.x, end.y - start.y);
+            double segment = Math.hypot((end.x - start.x) * scaleX, (end.y - start.y) * scaleY);
             if (travelled + segment >= distance) {
                 float ratio = segment > 0 ? (float) ((distance - travelled) / segment) : 0f;
                 return new PointF(start.x + (end.x - start.x) * ratio, start.y + (end.y - start.y) * ratio);

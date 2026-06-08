@@ -11,7 +11,9 @@ struct AITrackGeneratorView: View {
     @State private var tracedPoints: [CGPoint] = []
     @State private var trackName = "图片描线赛道"
     @State private var trackLengthText = "800"
-    @State private var message = "选择赛道俯视图，然后沿赛道中心线手指描一圈。"
+    @State private var trackWidthText = ""
+    @State private var trackHeightText = ""
+    @State private var message = "选择赛道俯视图，比例不准时填写整体宽高，然后沿中心线描一圈。"
     @State private var errorMessage: String?
 
     var body: some View {
@@ -32,8 +34,19 @@ struct AITrackGeneratorView: View {
                 HStack(spacing: 10) {
                     TextField("赛道名称", text: $trackName)
                     TextField("长度米", text: $trackLengthText)
-                        .keyboardType(.numberPad)
+                        .keyboardType(.decimalPad)
                         .frame(width: 90)
+                }
+                .autocorrectionDisabled()
+                .textInputAutocapitalization(.never)
+                .padding(12)
+                .background(.black, in: RoundedRectangle(cornerRadius: 12))
+
+                HStack(spacing: 10) {
+                    TextField("整体宽米", text: $trackWidthText)
+                        .keyboardType(.decimalPad)
+                    TextField("整体高米", text: $trackHeightText)
+                        .keyboardType(.decimalPad)
                 }
                 .autocorrectionDisabled()
                 .textInputAutocapitalization(.never)
@@ -135,7 +148,7 @@ struct AITrackGeneratorView: View {
             }
             selectedImage = image
             tracedPoints = []
-            message = "照片已选择。沿赛道中心线描一圈，首尾会自动闭合。"
+            message = "照片已选择。沿赛道中心线描一圈；图片比例不准时填写整体宽高。"
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -146,7 +159,16 @@ struct AITrackGeneratorView: View {
         do {
             let origin = locationManager.fusedPose?.coordinate ?? locationManager.originCoordinate ?? CLLocationCoordinate2D(latitude: 31.234567, longitude: 121.345678)
             let length = Double(trackLengthText.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 800
-            let track = try AITrackGenerationService.convertImageTraceToTrackData(trackName: trackName, imagePoints: tracedPoints, origin: origin, targetLength: length)
+            let width = Double(trackWidthText.trimmingCharacters(in: .whitespacesAndNewlines))
+            let height = Double(trackHeightText.trimmingCharacters(in: .whitespacesAndNewlines))
+            let track = try AITrackGenerationService.convertImageTraceToTrackData(
+                trackName: trackName,
+                imagePoints: tracedPoints,
+                origin: origin,
+                targetLength: length,
+                targetWidth: width,
+                targetHeight: height
+            )
             trackDataManager.addGeneratedTrack(track)
             dismiss()
         } catch {
@@ -162,7 +184,7 @@ struct AITrackGeneratorView: View {
     }
 
     private func updateTraceMessage() {
-        message = tracedPoints.isEmpty ? "沿赛道中心线描一圈。" : "已记录 \(tracedPoints.count) 个描线点。越贴近中心线，生成越准。"
+        message = tracedPoints.isEmpty ? "沿赛道中心线描一圈。知道整体宽高时请填写，可自动修正图片比例。" : "已记录 \(tracedPoints.count) 个描线点。越贴近中心线，生成越准。"
     }
 
     private func imageRect(imageSize: CGSize, container: CGSize) -> CGRect {

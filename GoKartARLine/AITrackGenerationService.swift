@@ -211,7 +211,7 @@ final class AITrackGenerationService {
         return TrackData(trackName: aiTrack.trackName, trackLength: aiTrack.trackLength, cornerCount: aiTrack.cornerCount, points: points, importedAt: Date())
     }
 
-    static func convertImageTraceToTrackData(trackName: String, imagePoints: [CGPoint], origin: CLLocationCoordinate2D, targetLength: Double) throws -> TrackData {
+    static func convertImageTraceToTrackData(trackName: String, imagePoints: [CGPoint], origin: CLLocationCoordinate2D, targetLength: Double, targetWidth: Double? = nil, targetHeight: Double? = nil) throws -> TrackData {
         var cleanPoints: [CGPoint] = []
         for point in imagePoints {
             if let last = cleanPoints.last, hypot(point.x - last.x, point.y - last.y) < 4 { continue }
@@ -224,18 +224,35 @@ final class AITrackGenerationService {
 
         let pixelLength = polylineLength(cleanPoints)
         let length = targetLength.isFinite ? max(targetLength, 120) : 800
-        let sampleCount = min(max(Int(length / 3.0), 120), 500)
-        let sampled = (0...sampleCount).map { index in
-            point(on: cleanPoints, at: pixelLength * Double(index) / Double(sampleCount))
+        let bounds = traceBounds(cleanPoints)
+        let width = targetWidth ?? 0
+        let height = targetHeight ?? 0
+        let hasDimensions = width.isFinite && height.isFinite && width > 1 && height > 1 && bounds.width > 1 && bounds.height > 1
+        let scaleX: Double
+        let scaleY: Double
+        let scaledLength: Double
+        if hasDimensions {
+            scaleX = width / bounds.width
+            scaleY = height / bounds.height
+            scaledLength = max(scaledPolylineLength(cleanPoints, scaleX: scaleX, scaleY: scaleY), 1)
+        } else {
+            let metersPerPixel = pixelLength > 1 ? length / pixelLength : 1
+            scaleX = metersPerPixel
+            scaleY = metersPerPixel
+            scaledLength = length
         }
-        let metersPerPixel = pixelLength > 1 ? length / pixelLength : 1
+        let samplingLength = max(scaledLength, 1)
+        let sampleCount = min(max(Int(samplingLength / 3.0), 120), 500)
+        let sampled = (0...sampleCount).map { index in
+            point(on: cleanPoints, atScaledDistance: samplingLength * Double(index) / Double(sampleCount), scaleX: scaleX, scaleY: scaleY)
+        }
         let anchor = sampled.first ?? cleanPoints[0]
         let latitudeMeters = 111_320.0
         let longitudeMeters = max(cos(origin.latitude * .pi / 180.0) * 111_320.0, 1.0)
         let colors = localColors(for: sampled)
         let points = sampled.enumerated().map { index, point in
-            let east = Double(point.x - anchor.x) * metersPerPixel
-            let north = -Double(point.y - anchor.y) * metersPerPixel
+            let east = Double(point.x - anchor.x) * scaleX
+            let north = -Double(point.y - anchor.y) * scaleY
             let color = colors[index]
             return TrackPoint(
                 latitude: origin.latitude + north / latitudeMeters,
@@ -246,7 +263,10 @@ final class AITrackGenerationService {
         }
         let corners = colors.filter { $0 == .red }.count / 6
         let name = trackName.trimmingCharacters(in: .whitespacesAndNewlines)
-        return TrackData(trackName: name.isEmpty ? "图片描线赛道" : name, trackLength: length, cornerCount: max(corners, 1), points: points, importedAt: Date())
+        let measuredLength = zip(points, points.dropFirst()).reduce(0.0) { partial, pair in
+            partial + GeoConverter.distanceMeters(from: pair.0.coordinate, to: pair.1.coordinate)
+        }
+        return TrackData(trackName: name.isEmpty ? "图片描线赛道" : name, trackLength: measuredLength > 1 ? measuredLength : scaledLength, cornerCount: max(corners, 1), points: points, importedAt: Date())
     }
 
     static func convertToTrackData(_ aiTrack: AITrackResponse, origin: CLLocationCoordinate2D, currentImagePoint: CGPoint? = nil, headingDegrees: Double = 0) -> TrackData {
@@ -282,13 +302,38 @@ final class AITrackGenerationService {
         }
     }
 
-    private static func point(on points: [CGPoint], at distance: Double) -> CGPoint {
+    private static func traceBounds(_ points: [CGPoint]) -> (width: Double, height: Double) {
+        guard let first = points.first else { return (0, 0) }
+        var minX = first.x
+        var maxX = first.x
+        var minY = first.y
+        var maxY = first.y
+        for point in points.dropFirst() {
+            minX = min(minX, point.x)
+            maxX = max(maxX, point.x)
+            minY = min(minY, point.y)
+            maxY = max(maxY, point.y)
+        }
+        return (Double(maxX - minX), Double(maxY - minY))
+    }
+
+    private static func scaledPolylineLength(_ points: [CGPoint], scaleX: Double, scaleY: Double) -> Double {
+        zip(points, points.dropFirst()).reduce(0) { partial, pair in
+            let dx = Double(pair.1.x - pair.0.x) * scaleX
+            let dy = Double(pair.1.y - pair.0.y) * scaleY
+            return partial + hypot(dx, dy)
+        }
+    }
+
+    private static func point(on points: [CGPoint], atScaledDistance distance: Double, scaleX: Double, scaleY: Double) -> CGPoint {
         guard points.count > 1 else { return points.first ?? .zero }
         var travelled = 0.0
         for index in 1..<points.count {
             let start = points[index - 1]
             let end = points[index]
-            let segmentLength = Double(hypot(end.x - start.x, end.y - start.y))
+            let dx = Double(end.x - start.x) * scaleX
+            let dy = Double(end.y - start.y) * scaleY
+            let segmentLength = hypot(dx, dy)
             if travelled + segmentLength >= distance {
                 let ratio = segmentLength > 0 ? CGFloat((distance - travelled) / segmentLength) : 0
                 return CGPoint(x: start.x + (end.x - start.x) * ratio, y: start.y + (end.y - start.y) * ratio)
