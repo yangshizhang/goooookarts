@@ -31,6 +31,8 @@ struct AITrackGeneratorView: View {
                                 .frame(maxWidth: .infinity)
                         }
                         .buttonStyle(.liquidGlassProminent)
+                        Button("收起键盘") { focusedField = nil }
+                            .buttonStyle(.liquidGlass)
                         Button("撤销") { if !tracedPoints.isEmpty { tracedPoints.removeLast(); updateTraceMessage() } }
                             .buttonStyle(.liquidGlass)
                         Button("清空") { tracedPoints.removeAll(); updateTraceMessage() }
@@ -72,21 +74,15 @@ struct AITrackGeneratorView: View {
                         .foregroundStyle(.secondary)
                         .frame(maxWidth: .infinity, alignment: .leading)
 
-                    HStack(spacing: 10) {
-                        Button("收起键盘") {
-                            focusedField = nil
-                        }
-                        .buttonStyle(.liquidGlass)
-                        Button {
-                            focusedField = nil
-                            generateTrackFromTrace()
-                        } label: {
-                            Label("按描线生成并导入", systemImage: "point.topleft.down.curvedto.point.bottomright.up")
-                                .frame(maxWidth: .infinity)
-                        }
-                        .buttonStyle(.liquidGlassProminent)
-                        .disabled(selectedImage == nil || tracedPoints.count < 8)
+                    Button {
+                        focusedField = nil
+                        generateTrackFromTrace()
+                    } label: {
+                        Label("按描线生成并导入", systemImage: "point.topleft.down.curvedto.point.bottomright.up")
+                            .frame(maxWidth: .infinity)
                     }
+                    .buttonStyle(.liquidGlassProminent)
+                    .disabled(selectedImage == nil || tracedPoints.count < 8)
                 }
                 .padding()
             }

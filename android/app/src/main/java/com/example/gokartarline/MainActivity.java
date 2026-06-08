@@ -1216,6 +1216,7 @@ public class MainActivity extends Activity {
         title.setTypeface(Typeface.DEFAULT_BOLD);
         title.setTextSize(22);
         header.addView(title, new LinearLayout.LayoutParams(0, -2, 1));
+        addButton(header, "收起键盘", v -> hideKeyboard(root));
         addButton(header, "关闭", v -> backHome());
         root.addView(header, new LinearLayout.LayoutParams(-1, dp(62)));
         Button photo = new Button(this);
@@ -1261,10 +1262,6 @@ public class MainActivity extends Activity {
         LinearLayout bottomActions = new LinearLayout(this);
         bottomActions.setOrientation(LinearLayout.HORIZONTAL);
         bottomActions.setGravity(Gravity.CENTER);
-        Button dismissKeyboard = new Button(this);
-        dismissKeyboard.setText("收起键盘");
-        applyGlassButton(dismissKeyboard);
-        dismissKeyboard.setOnClickListener(v -> hideKeyboard(root));
         Button generate = new Button(this);
         generate.setText("按描线生成并导入");
         applyGlassButton(generate);
@@ -1277,8 +1274,7 @@ public class MainActivity extends Activity {
                     .apply();
             generateImageTraceTrack(name.getText().toString(), length.getText().toString(), width.getText().toString(), height.getText().toString());
         });
-        bottomActions.addView(dismissKeyboard, new LinearLayout.LayoutParams(0, dp(58), 0.8f));
-        bottomActions.addView(generate, new LinearLayout.LayoutParams(0, dp(58), 1.4f));
+        bottomActions.addView(generate, new LinearLayout.LayoutParams(-1, dp(58)));
         root.addView(bottomActions, new LinearLayout.LayoutParams(-1, dp(62)));
         setContentView(root);
         root.post(() -> {
