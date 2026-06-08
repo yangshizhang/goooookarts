@@ -72,15 +72,21 @@ struct AITrackGeneratorView: View {
                         .foregroundStyle(.secondary)
                         .frame(maxWidth: .infinity, alignment: .leading)
 
-                    Button {
-                        focusedField = nil
-                        generateTrackFromTrace()
-                    } label: {
-                        Label("按描线生成并导入", systemImage: "point.topleft.down.curvedto.point.bottomright.up")
-                            .frame(maxWidth: .infinity)
+                    HStack(spacing: 10) {
+                        Button("收起键盘") {
+                            focusedField = nil
+                        }
+                        .buttonStyle(.liquidGlass)
+                        Button {
+                            focusedField = nil
+                            generateTrackFromTrace()
+                        } label: {
+                            Label("按描线生成并导入", systemImage: "point.topleft.down.curvedto.point.bottomright.up")
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.liquidGlassProminent)
+                        .disabled(selectedImage == nil || tracedPoints.count < 8)
                     }
-                    .buttonStyle(.liquidGlassProminent)
-                    .disabled(selectedImage == nil || tracedPoints.count < 8)
                 }
                 .padding()
             }

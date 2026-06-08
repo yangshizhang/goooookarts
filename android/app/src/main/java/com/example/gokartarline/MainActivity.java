@@ -1249,7 +1249,6 @@ public class MainActivity extends Activity {
         traceTools.setGravity(Gravity.CENTER);
         addButton(traceTools, "撤销", v -> { if (!aiDrawnPoints.isEmpty()) { aiDrawnPoints.remove(aiDrawnPoints.size() - 1); updateAITraceMessage(); if (aiImageView != null) aiImageView.invalidate(); } });
         addButton(traceTools, "清空", v -> { aiDrawnPoints.clear(); updateAITraceMessage(); if (aiImageView != null) aiImageView.invalidate(); });
-        addButton(traceTools, "收起键盘", v -> hideKeyboard(root));
         content.addView(traceTools, new LinearLayout.LayoutParams(-1, dp(58)));
         aiImageView = new ImagePointView(this);
         LinearLayout.LayoutParams imageLp = new LinearLayout.LayoutParams(-1, dp(320));
@@ -1259,6 +1258,13 @@ public class MainActivity extends Activity {
         aiMessage.setTextColor(Color.argb(190, 255, 255, 255));
         content.addView(aiMessage);
         root.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1));
+        LinearLayout bottomActions = new LinearLayout(this);
+        bottomActions.setOrientation(LinearLayout.HORIZONTAL);
+        bottomActions.setGravity(Gravity.CENTER);
+        Button dismissKeyboard = new Button(this);
+        dismissKeyboard.setText("收起键盘");
+        applyGlassButton(dismissKeyboard);
+        dismissKeyboard.setOnClickListener(v -> hideKeyboard(root));
         Button generate = new Button(this);
         generate.setText("按描线生成并导入");
         applyGlassButton(generate);
@@ -1271,7 +1277,9 @@ public class MainActivity extends Activity {
                     .apply();
             generateImageTraceTrack(name.getText().toString(), length.getText().toString(), width.getText().toString(), height.getText().toString());
         });
-        root.addView(generate, new LinearLayout.LayoutParams(-1, dp(58)));
+        bottomActions.addView(dismissKeyboard, new LinearLayout.LayoutParams(0, dp(58), 0.8f));
+        bottomActions.addView(generate, new LinearLayout.LayoutParams(0, dp(58), 1.4f));
+        root.addView(bottomActions, new LinearLayout.LayoutParams(-1, dp(62)));
         setContentView(root);
         root.post(() -> {
             root.setAlpha(0f);
