@@ -72,6 +72,7 @@ public class MainActivity extends Activity {
     private File recordingFile;
     private Bitmap selectedAIImage;
     private PointF selectedAIFinishPoint;
+    private final ArrayList<PointF> aiDrawnPoints = new ArrayList<>();
     private ImagePointView aiImageView;
     private TextView aiMessage;
     private AlertDialog activeDialog;
@@ -957,7 +958,7 @@ public class MainActivity extends Activity {
         LinearLayout box = glassDialogBox();
         LinearLayout tools = new LinearLayout(this);
         tools.setGravity(Gravity.CENTER);
-        addButton(tools, "AI生成", v -> { closeOpenDialogs(); showAITrackGenerator(); });
+        addButton(tools, "图片描线", v -> { closeOpenDialogs(); showAITrackGenerator(); });
         addButton(tools, "地图绘制", v -> { closeOpenDialogs(); showMapDrawer(); });
         box.addView(tools, new LinearLayout.LayoutParams(-1, dp(62)));
         ScrollView scroll = new ScrollView(this);
@@ -1003,7 +1004,7 @@ public class MainActivity extends Activity {
         row.addView(texts, new LinearLayout.LayoutParams(0, -2, 1));
         Button select = addButton(row, "选择", v -> { selectTrack(index); showMapCalibration(index); });
         Button rename = addButton(row, "重命名", v -> renameTrack(index));
-        Button delete = addButton(row, "删除", v -> deleteTrack(index));
+        Button delete = addButton(row, "删除", v -> { deleteTrack(index); closeOpenDialogs(); showTrackList(); });
         select.setMinWidth(dp(86));
         rename.setMinWidth(dp(96));
         delete.setMinWidth(dp(86));
@@ -1016,7 +1017,7 @@ public class MainActivity extends Activity {
     private void renameSelected() { if (selectedTrack >= 0) renameTrack(selectedTrack); }
     private void renameTrack(int index) { if (index < 0 || index >= tracks.size()) return; EditText input = new EditText(this); input.setText(tracks.get(index).name); input.setTextColor(Color.WHITE); input.setHintTextColor(0xAAFFFFFF); input.setBackground(mnsjControlBackground()); showGlassDialog(new AlertDialog.Builder(this).setTitle("重命名赛道").setView(input).setPositiveButton("保存", (d, w) -> { tracks.get(index).name = input.getText().toString().trim(); saveTracks(); selectTrack(index); }).setNegativeButton("取消", null).create()); }
     private void deleteSelected() { if (selectedTrack >= 0) deleteTrack(selectedTrack); }
-    private void deleteTrack(int index) { if (index < 0 || index >= tracks.size()) return; tracks.remove(index); selectedTrack = Math.min(index, tracks.size() - 1); saveTracks(); if (selectedTrack >= 0) selectTrack(selectedTrack); else overlay.setTrack(new ArrayList<>()); updateHud(); toast("已删除"); }
+    private void deleteTrack(int index) { if (index < 0 || index >= tracks.size()) return; tracks.remove(index); selectedTrack = tracks.isEmpty() ? -1 : Math.min(index, tracks.size() - 1); saveTracks(); if (selectedTrack >= 0) selectTrack(selectedTrack); else if (overlay != null) overlay.setTrack(new ArrayList<>()); updateHud(); toast("已删除"); }
 
     private void showMapCalibration(int index) {
         if (index < 0 || index >= tracks.size()) return;
@@ -1168,13 +1169,14 @@ public class MainActivity extends Activity {
         pauseCamera();
         selectedAIImage = null;
         selectedAIFinishPoint = null;
+        aiDrawnPoints.clear();
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setPadding(dp(14), dp(14), dp(14), dp(14));
         root.setBackgroundColor(Color.BLACK);
         LinearLayout header = new LinearLayout(this);
         header.setGravity(Gravity.CENTER_VERTICAL);
-        TextView title = label("AI生成赛道");
+        TextView title = label("图片描线生成");
         title.setTypeface(Typeface.DEFAULT_BOLD);
         title.setTextSize(22);
         header.addView(title, new LinearLayout.LayoutParams(0, -2, 1));
@@ -1185,25 +1187,29 @@ public class MainActivity extends Activity {
         applyGlassButton(photo);
         photo.setOnClickListener(v -> pickAIImage());
         root.addView(photo, new LinearLayout.LayoutParams(-1, dp(56)));
-        EditText key = aiField("AI接口Key（保存在本机）", prefs.getString("apiKey", ""), true);
-        EditText base = aiField("Base URL", prefs.getString("baseUrl", "https://api.tutujin.com/v1"), false);
-        EditText model = aiField("Model ID", prefs.getString("model", "claude-3-5-sonnet-20240620"), false);
-        root.addView(key);
-        root.addView(base);
-        root.addView(model);
+        EditText name = aiField("赛道名称", "图片描线赛道", false);
+        EditText length = aiField("赛道长度米（不知道填800）", prefs.getString("imageTrackLength", "800"), false);
+        length.setInputType(InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_FLAG_DECIMAL);
+        root.addView(name);
+        root.addView(length);
+        LinearLayout traceTools = new LinearLayout(this);
+        traceTools.setGravity(Gravity.CENTER);
+        addButton(traceTools, "撤销", v -> { if (!aiDrawnPoints.isEmpty()) { aiDrawnPoints.remove(aiDrawnPoints.size() - 1); updateAITraceMessage(); if (aiImageView != null) aiImageView.invalidate(); } });
+        addButton(traceTools, "清空", v -> { aiDrawnPoints.clear(); updateAITraceMessage(); if (aiImageView != null) aiImageView.invalidate(); });
+        root.addView(traceTools, new LinearLayout.LayoutParams(-1, dp(58)));
         aiImageView = new ImagePointView(this);
         LinearLayout.LayoutParams imageLp = new LinearLayout.LayoutParams(-1, 0, 1);
         imageLp.setMargins(0, dp(12), 0, dp(8));
         root.addView(aiImageView, imageLp);
-        aiMessage = label("选择赛道俯视图，然后点击图片上的起终点位置。");
+        aiMessage = label("选择赛道俯视图，然后沿赛道中心线手指描一圈。");
         aiMessage.setTextColor(Color.argb(190, 255, 255, 255));
         root.addView(aiMessage);
         Button generate = new Button(this);
-        generate.setText("AI生成并导入赛道");
+        generate.setText("按描线生成并导入");
         applyGlassButton(generate);
         generate.setOnClickListener(v -> {
-            prefs.edit().putString("apiKey", key.getText().toString()).putString("baseUrl", base.getText().toString()).putString("model", model.getText().toString()).apply();
-            generateAITrack();
+            prefs.edit().putString("imageTrackLength", length.getText().toString()).apply();
+            generateImageTraceTrack(name.getText().toString(), length.getText().toString());
         });
         root.addView(generate, new LinearLayout.LayoutParams(-1, dp(58)));
         setContentView(root);
@@ -1241,9 +1247,25 @@ public class MainActivity extends Activity {
         try (InputStream in = getContentResolver().openInputStream(uri)) {
             selectedAIImage = BitmapFactory.decodeStream(in);
             selectedAIFinishPoint = null;
+            aiDrawnPoints.clear();
             if (aiImageView != null) aiImageView.setImage(selectedAIImage);
-            if (aiMessage != null) aiMessage.setText("照片已选择。请点击图片上的起终点位置。");
+            if (aiMessage != null) aiMessage.setText("照片已选择。沿赛道中心线描一圈，首尾会自动闭合。");
         } catch (Exception e) { toast("照片读取失败：" + e.getMessage()); }
+    }
+
+    private void generateImageTraceTrack(String name, String lengthText) {
+        if (selectedAIImage == null || aiDrawnPoints.size() < 8) { toast("请先选择照片并沿赛道描一圈"); return; }
+        try {
+            double length = Double.parseDouble(lengthText.trim().isEmpty() ? "800" : lengthText.trim());
+            if (Double.isNaN(length) || Double.isInfinite(length) || length < 120) length = 800;
+            TrackData track = buildTrackFromImageTrace(name, length);
+            addTrack(track);
+            toast("已生成并导入：" + track.name);
+            backHome();
+        } catch (Exception e) {
+            toast("描线生成失败：" + e.getMessage());
+            if (aiMessage != null) aiMessage.setText("描线点太少或路径无效，请沿赛道中心线完整描一圈。");
+        }
     }
 
     private void generateAITrack() {
@@ -1379,31 +1401,53 @@ public class MainActivity extends Activity {
             }
             fitImageRect();
             canvas.drawBitmap(bitmap, null, imageRect, null);
-            if (selectedAIFinishPoint != null) {
-                float x = imageRect.left + selectedAIFinishPoint.x / bitmap.getWidth() * imageRect.width();
-                float y = imageRect.top + selectedAIFinishPoint.y / bitmap.getHeight() * imageRect.height();
-                paint.setStyle(Paint.Style.FILL);
-                paint.setColor(Color.RED);
-                canvas.drawCircle(x, y, dp(9), paint);
+            if (!aiDrawnPoints.isEmpty()) {
+                Path path = new Path();
+                PointF first = imageToView(aiDrawnPoints.get(0));
+                path.moveTo(first.x, first.y);
+                for (int i = 1; i < aiDrawnPoints.size(); i++) {
+                    PointF point = imageToView(aiDrawnPoints.get(i));
+                    path.lineTo(point.x, point.y);
+                }
                 paint.setStyle(Paint.Style.STROKE);
-                paint.setStrokeWidth(dp(3));
-                paint.setColor(Color.WHITE);
-                canvas.drawCircle(x, y, dp(9), paint);
+                paint.setStrokeWidth(dp(5));
+                paint.setStrokeCap(Paint.Cap.ROUND);
+                paint.setStrokeJoin(Paint.Join.ROUND);
+                paint.setColor(Color.rgb(0, 255, 70));
+                canvas.drawPath(path, paint);
+                if (aiDrawnPoints.size() > 2) {
+                    PointF last = imageToView(aiDrawnPoints.get(aiDrawnPoints.size() - 1));
+                    paint.setStrokeWidth(dp(2));
+                    paint.setColor(Color.argb(150, 255, 255, 255));
+                    canvas.drawLine(last.x, last.y, first.x, first.y, paint);
+                }
+                paint.setStyle(Paint.Style.FILL);
+                for (int i = 0; i < aiDrawnPoints.size(); i++) {
+                    PointF point = imageToView(aiDrawnPoints.get(i));
+                    paint.setColor(i == 0 ? Color.RED : Color.rgb(0, 255, 70));
+                    canvas.drawCircle(point.x, point.y, i == 0 ? dp(7) : dp(4), paint);
+                }
             }
         }
 
         @Override public boolean onTouchEvent(android.view.MotionEvent event) {
             if (bitmap == null) return true;
-            if (event.getAction() == android.view.MotionEvent.ACTION_DOWN || event.getAction() == android.view.MotionEvent.ACTION_UP) {
+            if (event.getAction() == android.view.MotionEvent.ACTION_DOWN || event.getAction() == android.view.MotionEvent.ACTION_MOVE || event.getAction() == android.view.MotionEvent.ACTION_UP) {
                 fitImageRect();
-                float x = Math.min(Math.max(event.getX(), imageRect.left), imageRect.right);
-                float y = Math.min(Math.max(event.getY(), imageRect.top), imageRect.bottom);
-                selectedAIFinishPoint = new PointF((x - imageRect.left) / imageRect.width() * bitmap.getWidth(), (y - imageRect.top) / imageRect.height() * bitmap.getHeight());
-                if (aiMessage != null) aiMessage.setText("已选择终点：x=" + (int) selectedAIFinishPoint.x + "，y=" + (int) selectedAIFinishPoint.y + "。");
+                if (!imageRect.contains(event.getX(), event.getY())) return true;
+                PointF imagePoint = new PointF((event.getX() - imageRect.left) / imageRect.width() * bitmap.getWidth(), (event.getY() - imageRect.top) / imageRect.height() * bitmap.getHeight());
+                if (aiDrawnPoints.isEmpty() || Math.hypot(imagePoint.x - aiDrawnPoints.get(aiDrawnPoints.size() - 1).x, imagePoint.y - aiDrawnPoints.get(aiDrawnPoints.size() - 1).y) >= 6) {
+                    aiDrawnPoints.add(imagePoint);
+                    updateAITraceMessage();
+                }
                 invalidate();
                 return true;
             }
             return true;
+        }
+
+        private PointF imageToView(PointF point) {
+            return new PointF(imageRect.left + point.x / bitmap.getWidth() * imageRect.width(), imageRect.top + point.y / bitmap.getHeight() * imageRect.height());
         }
 
         private void fitImageRect() {
@@ -1413,6 +1457,101 @@ public class MainActivity extends Activity {
             float height = bitmap.getHeight() * scale;
             imageRect.set((getWidth() - width) / 2f, (getHeight() - height) / 2f, (getWidth() + width) / 2f, (getHeight() + height) / 2f);
         }
+    }
+
+    private void updateAITraceMessage() {
+        if (aiMessage == null) return;
+        aiMessage.setText(aiDrawnPoints.isEmpty() ? "沿赛道中心线描一圈。" : "已记录 " + aiDrawnPoints.size() + " 个描线点。越贴近中心线，生成越准。");
+    }
+
+    private TrackData buildTrackFromImageTrace(String name, double targetLength) throws Exception {
+        ArrayList<PointF> clean = new ArrayList<>();
+        for (PointF point : aiDrawnPoints) {
+            if (!clean.isEmpty() && Math.hypot(point.x - clean.get(clean.size() - 1).x, point.y - clean.get(clean.size() - 1).y) < 4) continue;
+            clean.add(new PointF(point.x, point.y));
+        }
+        if (clean.size() < 4) throw new IOException("描线点太少");
+        PointF first = clean.get(0);
+        PointF last = clean.get(clean.size() - 1);
+        if (Math.hypot(first.x - last.x, first.y - last.y) > 4) clean.add(new PointF(first.x, first.y));
+        double pixelLength = imagePolylineLength(clean);
+        double length = Math.max(targetLength, 120);
+        int sampleCount = Math.min(Math.max((int) (length / 3.0), 120), 500);
+        ArrayList<PointF> sampled = new ArrayList<>();
+        for (int i = 0; i <= sampleCount; i++) sampled.add(imagePointOnPolyline(clean, pixelLength * i / sampleCount));
+        ArrayList<String> colors = localImageTraceColors(sampled);
+        double metersPerPixel = pixelLength > 1 ? length / pixelLength : 1;
+        PointF anchor = sampled.get(0);
+        double originLat = latestLocation != null ? latestLocation.getLatitude() : 31.234567;
+        double originLon = latestLocation != null ? latestLocation.getLongitude() : 121.345678;
+        double latScale = 111320.0;
+        double lonScale = Math.max(Math.cos(Math.toRadians(originLat)) * 111320.0, 1);
+        TrackData track = new TrackData();
+        track.name = name.trim().isEmpty() ? "图片描线赛道" : name.trim();
+        track.length = length;
+        int redCount = 0;
+        for (int i = 0; i < sampled.size(); i++) {
+            PointF point = sampled.get(i);
+            String color = colors.get(i);
+            if ("red".equals(color)) redCount++;
+            double east = (point.x - anchor.x) * metersPerPixel;
+            double north = -(point.y - anchor.y) * metersPerPixel;
+            track.points.add(new TrackPoint(originLat + north / latScale, originLon + east / lonScale, speedForColor(color), color));
+        }
+        track.cornerCount = Math.max(1, redCount / 6);
+        return track;
+    }
+
+    private double imagePolylineLength(List<PointF> points) {
+        double total = 0;
+        for (int i = 1; i < points.size(); i++) total += Math.hypot(points.get(i).x - points.get(i - 1).x, points.get(i).y - points.get(i - 1).y);
+        return total;
+    }
+
+    private PointF imagePointOnPolyline(List<PointF> points, double distance) {
+        double travelled = 0;
+        for (int i = 1; i < points.size(); i++) {
+            PointF start = points.get(i - 1);
+            PointF end = points.get(i);
+            double segment = Math.hypot(end.x - start.x, end.y - start.y);
+            if (travelled + segment >= distance) {
+                float ratio = segment > 0 ? (float) ((distance - travelled) / segment) : 0f;
+                return new PointF(start.x + (end.x - start.x) * ratio, start.y + (end.y - start.y) * ratio);
+            }
+            travelled += segment;
+        }
+        PointF last = points.get(points.size() - 1);
+        return new PointF(last.x, last.y);
+    }
+
+    private ArrayList<String> localImageTraceColors(List<PointF> sampled) {
+        int baseCount = Math.max(sampled.size() - 1, 1);
+        double[] turns = new double[sampled.size()];
+        for (int i = 0; i < sampled.size(); i++) {
+            PointF previous = sampled.get((i - 4 + baseCount) % baseCount);
+            PointF current = sampled.get(i % baseCount);
+            PointF next = sampled.get((i + 4) % baseCount);
+            double angleA = Math.atan2(current.y - previous.y, current.x - previous.x);
+            double angleB = Math.atan2(next.y - current.y, next.x - current.x);
+            double delta = Math.abs(Math.toDegrees(angleB - angleA)) % 360;
+            turns[i] = delta > 180 ? 360 - delta : delta;
+        }
+        ArrayList<String> colors = new ArrayList<>();
+        for (int i = 0; i < sampled.size(); i++) {
+            double upcoming = 0;
+            for (int j = 1; j <= 8; j++) upcoming = Math.max(upcoming, turns[(i + j) % baseCount]);
+            double current = turns[i];
+            if (upcoming > 34 || current > 38) colors.add("red");
+            else if (upcoming > 18 || current > 20) colors.add("orange");
+            else colors.add("green");
+        }
+        return colors;
+    }
+
+    private double speedForColor(String color) {
+        if ("red".equals(color)) return 34;
+        if ("orange".equals(color)) return 48;
+        return 65;
     }
 
     final class CalibrationCanvas extends View {

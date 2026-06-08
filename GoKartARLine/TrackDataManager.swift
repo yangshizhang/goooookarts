@@ -54,6 +54,12 @@ final class TrackDataManager: ObservableObject {
         saveTracks()
     }
 
+    func delete(track: TrackData) {
+        tracks.removeAll { $0.id == track.id }
+        if let selectedTrackID, !tracks.contains(where: { $0.id == selectedTrackID }) { self.selectedTrackID = tracks.first?.id }
+        saveTracks()
+    }
+
     func rename(track: TrackData, to name: String) {
         guard let index = tracks.firstIndex(where: { $0.id == track.id }) else { return }
         tracks[index].trackName = name.trimmingCharacters(in: .whitespacesAndNewlines)

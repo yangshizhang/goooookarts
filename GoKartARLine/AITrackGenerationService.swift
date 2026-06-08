@@ -211,6 +211,44 @@ final class AITrackGenerationService {
         return TrackData(trackName: aiTrack.trackName, trackLength: aiTrack.trackLength, cornerCount: aiTrack.cornerCount, points: points, importedAt: Date())
     }
 
+    static func convertImageTraceToTrackData(trackName: String, imagePoints: [CGPoint], origin: CLLocationCoordinate2D, targetLength: Double) throws -> TrackData {
+        var cleanPoints: [CGPoint] = []
+        for point in imagePoints {
+            if let last = cleanPoints.last, hypot(point.x - last.x, point.y - last.y) < 4 { continue }
+            cleanPoints.append(point)
+        }
+        guard cleanPoints.count >= 4 else { throw AITrackGenerationError.noJSON }
+        if let first = cleanPoints.first, let last = cleanPoints.last, hypot(first.x - last.x, first.y - last.y) > 4 {
+            cleanPoints.append(first)
+        }
+
+        let pixelLength = polylineLength(cleanPoints)
+        let length = targetLength.isFinite ? max(targetLength, 120) : 800
+        let sampleCount = min(max(Int(length / 3.0), 120), 500)
+        let sampled = (0...sampleCount).map { index in
+            point(on: cleanPoints, at: pixelLength * Double(index) / Double(sampleCount))
+        }
+        let metersPerPixel = pixelLength > 1 ? length / pixelLength : 1
+        let anchor = sampled.first ?? cleanPoints[0]
+        let latitudeMeters = 111_320.0
+        let longitudeMeters = max(cos(origin.latitude * .pi / 180.0) * 111_320.0, 1.0)
+        let colors = localColors(for: sampled)
+        let points = sampled.enumerated().map { index, point in
+            let east = Double(point.x - anchor.x) * metersPerPixel
+            let north = -Double(point.y - anchor.y) * metersPerPixel
+            let color = colors[index]
+            return TrackPoint(
+                latitude: origin.latitude + north / latitudeMeters,
+                longitude: origin.longitude + east / longitudeMeters,
+                speed: speed(for: color),
+                color: color
+            )
+        }
+        let corners = colors.filter { $0 == .red }.count / 6
+        let name = trackName.trimmingCharacters(in: .whitespacesAndNewlines)
+        return TrackData(trackName: name.isEmpty ? "图片描线赛道" : name, trackLength: length, cornerCount: max(corners, 1), points: points, importedAt: Date())
+    }
+
     static func convertToTrackData(_ aiTrack: AITrackResponse, origin: CLLocationCoordinate2D, currentImagePoint: CGPoint? = nil, headingDegrees: Double = 0) -> TrackData {
         let pixelLength = zip(aiTrack.points, aiTrack.points.dropFirst()).reduce(0.0) { partial, pair in
             let dx = pair.1.x - pair.0.x
@@ -236,6 +274,57 @@ final class AITrackGenerationService {
             )
         }
         return TrackData(trackName: aiTrack.trackName, trackLength: aiTrack.trackLength, cornerCount: aiTrack.cornerCount, points: points, importedAt: Date())
+    }
+
+    private static func polylineLength(_ points: [CGPoint]) -> Double {
+        zip(points, points.dropFirst()).reduce(0) { partial, pair in
+            partial + Double(hypot(pair.1.x - pair.0.x, pair.1.y - pair.0.y))
+        }
+    }
+
+    private static func point(on points: [CGPoint], at distance: Double) -> CGPoint {
+        guard points.count > 1 else { return points.first ?? .zero }
+        var travelled = 0.0
+        for index in 1..<points.count {
+            let start = points[index - 1]
+            let end = points[index]
+            let segmentLength = Double(hypot(end.x - start.x, end.y - start.y))
+            if travelled + segmentLength >= distance {
+                let ratio = segmentLength > 0 ? CGFloat((distance - travelled) / segmentLength) : 0
+                return CGPoint(x: start.x + (end.x - start.x) * ratio, y: start.y + (end.y - start.y) * ratio)
+            }
+            travelled += segmentLength
+        }
+        return points.last ?? .zero
+    }
+
+    private static func localColors(for sampled: [CGPoint]) -> [TrackPointColor] {
+        let baseCount = max(sampled.count - 1, 1)
+        let turnAngles = (0..<sampled.count).map { index -> Double in
+            let previous = sampled[(index - 4 + baseCount) % baseCount]
+            let current = sampled[index % baseCount]
+            let next = sampled[(index + 4) % baseCount]
+            let angleA = Double(atan2(current.y - previous.y, current.x - previous.x))
+            let angleB = Double(atan2(next.y - current.y, next.x - current.x))
+            var delta = abs((angleB - angleA) * 180 / .pi).truncatingRemainder(dividingBy: 360)
+            if delta > 180 { delta = 360 - delta }
+            return delta
+        }
+        return turnAngles.indices.map { index in
+            let upcoming = (1...8).map { turnAngles[(index + $0) % baseCount] }.max() ?? 0
+            let current = turnAngles[index]
+            if upcoming > 34 || current > 38 { return .red }
+            if upcoming > 18 || current > 20 { return .orange }
+            return .green
+        }
+    }
+
+    private static func speed(for color: TrackPointColor) -> Double {
+        switch color {
+        case .green: return 65
+        case .orange: return 48
+        case .red: return 34
+        }
     }
 
     private static func extractJSONObject(from text: String) -> String {

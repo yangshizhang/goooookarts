@@ -177,7 +177,10 @@ private struct TrackListView: View {
                             Text("\(Int(track.trackLength))m · \(track.cornerCount)弯 · \(track.points.count)点").font(.caption).foregroundStyle(.secondary)
                         }
                     }
-                    .swipeActions { Button("重命名") { renamingTrack = track; newName = track.trackName } }
+                    .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                        Button("删除", role: .destructive) { manager.delete(track: track) }
+                        Button("重命名") { renamingTrack = track; newName = track.trackName }
+                    }
                 }
                 .onDelete(perform: manager.deleteTracks)
             }
@@ -187,11 +190,16 @@ private struct TrackListView: View {
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
                     HStack {
-                        Button("AI生成") { showingAITrackGenerator = true }
+                        Button("图片描线") { showingAITrackGenerator = true }
                         Button("地图绘制") { showingMapTrackDrawer = true }
                     }
                 }
-                ToolbarItem(placement: .navigationBarTrailing) { Button("完成") { dismiss() } }
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    HStack {
+                        EditButton()
+                        Button("完成") { dismiss() }
+                    }
+                }
             }
             .buttonStyle(.liquidGlass)
             .sheet(isPresented: $showingAITrackGenerator) {

@@ -1,4 +1,4 @@
-﻿import SwiftUI
+import SwiftUI
 import PhotosUI
 import CoreLocation
 
@@ -8,37 +8,39 @@ struct AITrackGeneratorView: View {
     @EnvironmentObject private var locationManager: LocationManager
     @State private var selectedPhoto: PhotosPickerItem?
     @State private var selectedImage: UIImage?
-    @State private var displayedImageSize: CGSize = .zero
-    @State private var finishPoint: CGPoint?
-    @State private var apiKey = AITrackGenerationService.shared.apiKey
-    @State private var modelID = AITrackGenerationService.shared.model
-    @State private var baseURL = AITrackGenerationService.shared.baseURLString
-    @State private var isGenerating = false
-    @State private var message = "选择赛道俯视图，然后点击图片上的起终点位置。"
+    @State private var tracedPoints: [CGPoint] = []
+    @State private var trackName = "图片描线赛道"
+    @State private var trackLengthText = "800"
+    @State private var message = "选择赛道俯视图，然后沿赛道中心线手指描一圈。"
     @State private var errorMessage: String?
 
     var body: some View {
         NavigationStack {
-            VStack(spacing: 14) {
-                PhotosPicker(selection: $selectedPhoto, matching: .images) {
-                    Label(selectedImage == nil ? "选择赛道照片" : "更换赛道照片", systemImage: "photo")
-                        .frame(maxWidth: .infinity)
+            VStack(spacing: 12) {
+                HStack {
+                    PhotosPicker(selection: $selectedPhoto, matching: .images) {
+                        Label(selectedImage == nil ? "选择赛道照片" : "更换照片", systemImage: "photo")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.liquidGlassProminent)
+                    Button("撤销") { if !tracedPoints.isEmpty { tracedPoints.removeLast(); updateTraceMessage() } }
+                        .buttonStyle(.liquidGlass)
+                    Button("清空") { tracedPoints.removeAll(); updateTraceMessage() }
+                        .buttonStyle(.liquidGlass)
                 }
-                .buttonStyle(.liquidGlassProminent)
 
-                VStack(spacing: 10) {
-                    SecureField("AI接口Key（保存在本机Keychain）", text: $apiKey)
-                        .textContentType(.password)
-                    TextField("Base URL", text: $baseURL)
-                        .keyboardType(.URL)
-                    TextField("Model ID", text: $modelID)
+                HStack(spacing: 10) {
+                    TextField("赛道名称", text: $trackName)
+                    TextField("长度米", text: $trackLengthText)
+                        .keyboardType(.numberPad)
+                        .frame(width: 90)
                 }
                 .autocorrectionDisabled()
                 .textInputAutocapitalization(.never)
                 .padding(12)
                 .background(.black, in: RoundedRectangle(cornerRadius: 12))
 
-                imageSelectionArea
+                imageTraceArea
 
                 Text(message)
                     .font(.footnote)
@@ -46,31 +48,28 @@ struct AITrackGeneratorView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
 
                 Button {
-                    Task { await generateTrack() }
+                    generateTrackFromTrace()
                 } label: {
-                    if isGenerating {
-                        ProgressView().tint(.white)
-                    } else {
-                        Label("AI生成并导入赛道", systemImage: "sparkles")
-                    }
+                    Label("按描线生成并导入", systemImage: "point.topleft.down.curvedto.point.bottomright.up")
+                        .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.liquidGlassProminent)
-                .disabled(selectedImage == nil || finishPoint == nil || apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || modelID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || baseURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isGenerating)
+                .disabled(selectedImage == nil || tracedPoints.count < 8)
             }
             .padding()
             .background(.black)
-            .navigationTitle("AI生成赛道")
+            .navigationTitle("图片描线生成")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .navigationBarTrailing) { Button("关闭") { dismiss() } } }
             .onChange(of: selectedPhoto) { newValue in Task { await loadPhoto(newValue) } }
-            .alert("AI生成失败", isPresented: Binding(get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } })) {
+            .alert("生成失败", isPresented: Binding(get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } })) {
                 Button("知道了", role: .cancel) {}
             } message: { Text(errorMessage ?? "") }
         }
         .background(.black)
     }
 
-    private var imageSelectionArea: some View {
+    private var imageTraceArea: some View {
         GeometryReader { proxy in
             ZStack {
                 RoundedRectangle(cornerRadius: 16)
@@ -79,25 +78,12 @@ struct AITrackGeneratorView: View {
                     Image(uiImage: selectedImage)
                         .resizable()
                         .scaledToFit()
-                        .background(
-                            GeometryReader { imageProxy in
-                                Color.clear.onAppear { displayedImageSize = imageProxy.size }
-                            }
-                        )
-                        .overlay(alignment: .topLeading) {
-                            if let finishPoint {
-                                Circle()
-                                    .fill(.red)
-                                    .frame(width: 18, height: 18)
-                                    .overlay(Circle().stroke(.white, lineWidth: 3))
-                                    .position(viewPoint(from: finishPoint, container: proxy.size, imageSize: selectedImage.size))
-                            }
+                        .overlay {
+                            traceOverlay(container: proxy.size, imageSize: selectedImage.size)
                         }
                         .contentShape(Rectangle())
-                        .gesture(DragGesture(minimumDistance: 0).onEnded { value in
-                            let imagePoint = imagePoint(from: value.location, container: proxy.size, imageSize: selectedImage.size)
-                            finishPoint = imagePoint
-                            message = "已选择终点：x=\(Int(imagePoint.x)), y=\(Int(imagePoint.y))。"
+                        .gesture(DragGesture(minimumDistance: 0).onChanged { value in
+                            addTracePoint(value.location, container: proxy.size, imageSize: selectedImage.size)
                         })
                 } else {
                     VStack(spacing: 8) {
@@ -109,7 +95,34 @@ struct AITrackGeneratorView: View {
                 }
             }
         }
-        .frame(minHeight: 280)
+        .frame(minHeight: 300)
+    }
+
+    private func traceOverlay(container: CGSize, imageSize: CGSize) -> some View {
+        Canvas { context, _ in
+            guard tracedPoints.count > 1 else { return }
+            var path = Path()
+            path.move(to: viewPoint(from: tracedPoints[0], container: container, imageSize: imageSize))
+            for point in tracedPoints.dropFirst() {
+                path.addLine(to: viewPoint(from: point, container: container, imageSize: imageSize))
+            }
+            context.stroke(path, with: .color(.green), style: StrokeStyle(lineWidth: 5, lineCap: .round, lineJoin: .round))
+            if let first = tracedPoints.first, let last = tracedPoints.last, tracedPoints.count > 2 {
+                var closing = Path()
+                closing.move(to: viewPoint(from: last, container: container, imageSize: imageSize))
+                closing.addLine(to: viewPoint(from: first, container: container, imageSize: imageSize))
+                context.stroke(closing, with: .color(.white.opacity(0.45)), style: StrokeStyle(lineWidth: 2, dash: [6, 6]))
+            }
+        }
+        .overlay {
+            ForEach(Array(tracedPoints.enumerated()), id: \.offset) { index, point in
+                Circle()
+                    .fill(index == 0 ? .red : .green)
+                    .frame(width: index == 0 ? 14 : 8, height: index == 0 ? 14 : 8)
+                    .overlay(Circle().stroke(.white.opacity(index == 0 ? 1 : 0), lineWidth: 2))
+                    .position(viewPoint(from: point, container: container, imageSize: imageSize))
+            }
+        }
     }
 
     private func loadPhoto(_ item: PhotosPickerItem?) async {
@@ -120,52 +133,52 @@ struct AITrackGeneratorView: View {
                 return
             }
             selectedImage = image
-            finishPoint = nil
-            message = "照片已选择。请点击图片上的起终点位置。"
+            tracedPoints = []
+            message = "照片已选择。沿赛道中心线描一圈，首尾会自动闭合。"
         } catch {
             errorMessage = error.localizedDescription
         }
     }
 
-    private func generateTrack() async {
-        guard let selectedImage, let finishPoint else { return }
-        isGenerating = true
-        message = "AI正在分析赛道并生成约0.5米分段的平滑行车线，可能需要1-3分钟。"
+    private func generateTrackFromTrace() {
+        guard selectedImage != nil else { return }
         do {
-            AITrackGenerationService.shared.apiKey = apiKey
-            AITrackGenerationService.shared.model = modelID
-            AITrackGenerationService.shared.baseURLString = baseURL
             let origin = locationManager.fusedPose?.coordinate ?? locationManager.originCoordinate ?? CLLocationCoordinate2D(latitude: 31.234567, longitude: 121.345678)
-            let request = AITrackGenerationRequest(image: selectedImage, finishPoint: finishPoint, imageSize: selectedImage.size, originCoordinate: origin)
-            let track = try await AITrackGenerationService.shared.generateTrack(request: request)
+            let length = Double(trackLengthText.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 800
+            let track = try AITrackGenerationService.convertImageTraceToTrackData(trackName: trackName, imagePoints: tracedPoints, origin: origin, targetLength: length)
             trackDataManager.addGeneratedTrack(track)
-            message = "已生成并导入：\(track.trackName)（\(track.points.count)点）"
-            isGenerating = false
             dismiss()
         } catch {
-            isGenerating = false
-            errorMessage = error.localizedDescription
-            message = "生成失败，请检查Key、网络或图片质量。"
+            errorMessage = "描线点太少或路径无效，请沿赛道中心线完整描一圈。"
         }
     }
 
-    private func aspectFitSize(imageSize: CGSize, container: CGSize) -> CGSize {
-        guard imageSize.width > 0, imageSize.height > 0, container.width > 0, container.height > 0 else { return .zero }
-        let scale = min(container.width / imageSize.width, container.height / imageSize.height)
-        return CGSize(width: imageSize.width * scale, height: imageSize.height * scale)
+    private func addTracePoint(_ location: CGPoint, container: CGSize, imageSize: CGSize) {
+        guard let point = imagePointIfInside(location, container: container, imageSize: imageSize) else { return }
+        if let last = tracedPoints.last, hypot(point.x - last.x, point.y - last.y) < 6 { return }
+        tracedPoints.append(point)
+        updateTraceMessage()
     }
 
-    private func imagePoint(from viewPoint: CGPoint, container: CGSize, imageSize: CGSize) -> CGPoint {
-        let fitted = aspectFitSize(imageSize: imageSize, container: container)
-        let origin = CGPoint(x: (container.width - fitted.width) / 2, y: (container.height - fitted.height) / 2)
-        let x = min(max((viewPoint.x - origin.x) / max(fitted.width, 1) * imageSize.width, 0), imageSize.width)
-        let y = min(max((viewPoint.y - origin.y) / max(fitted.height, 1) * imageSize.height, 0), imageSize.height)
-        return CGPoint(x: x, y: y)
+    private func updateTraceMessage() {
+        message = tracedPoints.isEmpty ? "沿赛道中心线描一圈。" : "已记录 \(tracedPoints.count) 个描线点。越贴近中心线，生成越准。"
+    }
+
+    private func aspectFitRect(imageSize: CGSize, container: CGSize) -> CGRect {
+        guard imageSize.width > 0, imageSize.height > 0, container.width > 0, container.height > 0 else { return .zero }
+        let scale = min(container.width / imageSize.width, container.height / imageSize.height)
+        let fitted = CGSize(width: imageSize.width * scale, height: imageSize.height * scale)
+        return CGRect(x: (container.width - fitted.width) / 2, y: (container.height - fitted.height) / 2, width: fitted.width, height: fitted.height)
+    }
+
+    private func imagePointIfInside(_ viewPoint: CGPoint, container: CGSize, imageSize: CGSize) -> CGPoint? {
+        let rect = aspectFitRect(imageSize: imageSize, container: container)
+        guard rect.contains(viewPoint) else { return nil }
+        return CGPoint(x: (viewPoint.x - rect.minX) / max(rect.width, 1) * imageSize.width, y: (viewPoint.y - rect.minY) / max(rect.height, 1) * imageSize.height)
     }
 
     private func viewPoint(from imagePoint: CGPoint, container: CGSize, imageSize: CGSize) -> CGPoint {
-        let fitted = aspectFitSize(imageSize: imageSize, container: container)
-        let origin = CGPoint(x: (container.width - fitted.width) / 2, y: (container.height - fitted.height) / 2)
-        return CGPoint(x: origin.x + imagePoint.x / max(imageSize.width, 1) * fitted.width, y: origin.y + imagePoint.y / max(imageSize.height, 1) * fitted.height)
+        let rect = aspectFitRect(imageSize: imageSize, container: container)
+        return CGPoint(x: rect.minX + imagePoint.x / max(imageSize.width, 1) * rect.width, y: rect.minY + imagePoint.y / max(imageSize.height, 1) * rect.height)
     }
 }
