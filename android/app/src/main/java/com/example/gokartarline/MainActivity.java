@@ -24,6 +24,8 @@ import android.text.InputType;
 import android.util.Base64;
 import android.view.*;
 import android.view.animation.*;
+import android.view.inputmethod.EditorInfo;
+import android.view.inputmethod.InputMethodManager;
 import android.widget.*;
 import org.json.*;
 import java.io.*;
@@ -1206,6 +1208,8 @@ public class MainActivity extends Activity {
         root.setOrientation(LinearLayout.VERTICAL);
         root.setPadding(dp(14), dp(14), dp(14), dp(14));
         root.setBackgroundColor(Color.BLACK);
+        root.setFocusableInTouchMode(true);
+        root.setOnClickListener(v -> hideKeyboard(v));
         LinearLayout header = new LinearLayout(this);
         header.setGravity(Gravity.CENTER_VERTICAL);
         TextView title = label("图片描线生成");
@@ -1218,7 +1222,12 @@ public class MainActivity extends Activity {
         photo.setText("选择赛道照片");
         applyGlassButton(photo);
         photo.setOnClickListener(v -> pickAIImage());
-        root.addView(photo, new LinearLayout.LayoutParams(-1, dp(56)));
+        ScrollView scroll = new ScrollView(this);
+        scroll.setFillViewport(false);
+        LinearLayout content = new LinearLayout(this);
+        content.setOrientation(LinearLayout.VERTICAL);
+        scroll.addView(content, new ScrollView.LayoutParams(-1, -2));
+        content.addView(photo, new LinearLayout.LayoutParams(-1, dp(56)));
         EditText name = aiField("赛道名称", "图片描线赛道", false);
         EditText length = aiField("赛道长度米（不知道填800）", prefs.getString("imageTrackLength", "800"), false);
         EditText width = aiField("整体宽米", prefs.getString("imageTrackWidth", ""), false);
@@ -1226,29 +1235,35 @@ public class MainActivity extends Activity {
         length.setInputType(InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_FLAG_DECIMAL);
         width.setInputType(InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_FLAG_DECIMAL);
         height.setInputType(InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_FLAG_DECIMAL);
-        root.addView(name);
+        enableKeyboardDone(length);
+        enableKeyboardDone(width);
+        enableKeyboardDone(height);
+        content.addView(name);
         LinearLayout dimensions = new LinearLayout(this);
         dimensions.setOrientation(LinearLayout.HORIZONTAL);
         dimensions.addView(length, new LinearLayout.LayoutParams(0, dp(54), 1));
         dimensions.addView(width, new LinearLayout.LayoutParams(0, dp(54), 1));
         dimensions.addView(height, new LinearLayout.LayoutParams(0, dp(54), 1));
-        root.addView(dimensions);
+        content.addView(dimensions);
         LinearLayout traceTools = new LinearLayout(this);
         traceTools.setGravity(Gravity.CENTER);
         addButton(traceTools, "撤销", v -> { if (!aiDrawnPoints.isEmpty()) { aiDrawnPoints.remove(aiDrawnPoints.size() - 1); updateAITraceMessage(); if (aiImageView != null) aiImageView.invalidate(); } });
         addButton(traceTools, "清空", v -> { aiDrawnPoints.clear(); updateAITraceMessage(); if (aiImageView != null) aiImageView.invalidate(); });
-        root.addView(traceTools, new LinearLayout.LayoutParams(-1, dp(58)));
+        addButton(traceTools, "收起键盘", v -> hideKeyboard(root));
+        content.addView(traceTools, new LinearLayout.LayoutParams(-1, dp(58)));
         aiImageView = new ImagePointView(this);
-        LinearLayout.LayoutParams imageLp = new LinearLayout.LayoutParams(-1, 0, 1);
+        LinearLayout.LayoutParams imageLp = new LinearLayout.LayoutParams(-1, dp(320));
         imageLp.setMargins(0, dp(12), 0, dp(8));
-        root.addView(aiImageView, imageLp);
+        content.addView(aiImageView, imageLp);
         aiMessage = label("选择赛道俯视图，比例不准时填写整体宽高，然后沿中心线描一圈。");
         aiMessage.setTextColor(Color.argb(190, 255, 255, 255));
-        root.addView(aiMessage);
+        content.addView(aiMessage);
+        root.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1));
         Button generate = new Button(this);
         generate.setText("按描线生成并导入");
         applyGlassButton(generate);
         generate.setOnClickListener(v -> {
+            hideKeyboard(root);
             prefs.edit()
                     .putString("imageTrackLength", length.getText().toString())
                     .putString("imageTrackWidth", width.getText().toString())
@@ -1277,10 +1292,32 @@ public class MainActivity extends Activity {
         input.setBackground(mnsjControlBackground());
         input.setPadding(dp(12), 0, dp(12), 0);
         if (secure) input.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        enableKeyboardDone(input);
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, dp(54));
         lp.setMargins(0, dp(6), 0, 0);
         input.setLayoutParams(lp);
         return input;
+    }
+
+    private void enableKeyboardDone(EditText input) {
+        input.setImeOptions(EditorInfo.IME_ACTION_DONE);
+        input.setOnEditorActionListener((view, actionId, event) -> {
+            boolean enterPressed = event != null && event.getAction() == KeyEvent.ACTION_DOWN && event.getKeyCode() == KeyEvent.KEYCODE_ENTER;
+            if (actionId == EditorInfo.IME_ACTION_DONE || enterPressed) {
+                hideKeyboard(view);
+                view.clearFocus();
+                return true;
+            }
+            return false;
+        });
+    }
+
+    private void hideKeyboard(View view) {
+        try {
+            InputMethodManager inputMethodManager = (InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
+            inputMethodManager.hideSoftInputFromWindow(view.getWindowToken(), 0);
+            view.clearFocus();
+        } catch (Exception ignored) {}
     }
 
     private void pickAIImage() {

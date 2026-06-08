@@ -6,6 +6,7 @@ struct AITrackGeneratorView: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var trackDataManager: TrackDataManager
     @EnvironmentObject private var locationManager: LocationManager
+    @FocusState private var focusedField: InputField?
     @State private var selectedPhoto: PhotosPickerItem?
     @State private var selectedImage: UIImage?
     @State private var tracedPoints: [CGPoint] = []
@@ -16,64 +17,83 @@ struct AITrackGeneratorView: View {
     @State private var message = "选择赛道俯视图，比例不准时填写整体宽高，然后沿中心线描一圈。"
     @State private var errorMessage: String?
 
+    private enum InputField {
+        case trackName, length, width, height
+    }
+
     var body: some View {
         NavigationStack {
-            VStack(spacing: 12) {
-                HStack {
-                    PhotosPicker(selection: $selectedPhoto, matching: .images) {
-                        Label(selectedImage == nil ? "选择赛道照片" : "更换照片", systemImage: "photo")
+            ScrollView {
+                VStack(spacing: 12) {
+                    HStack {
+                        PhotosPicker(selection: $selectedPhoto, matching: .images) {
+                            Label(selectedImage == nil ? "选择赛道照片" : "更换照片", systemImage: "photo")
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.liquidGlassProminent)
+                        Button("撤销") { if !tracedPoints.isEmpty { tracedPoints.removeLast(); updateTraceMessage() } }
+                            .buttonStyle(.liquidGlass)
+                        Button("清空") { tracedPoints.removeAll(); updateTraceMessage() }
+                            .buttonStyle(.liquidGlass)
+                    }
+
+                    HStack(spacing: 10) {
+                        TextField("赛道名称", text: $trackName)
+                            .focused($focusedField, equals: .trackName)
+                            .submitLabel(.done)
+                            .onSubmit { focusedField = nil }
+                        TextField("长度米", text: $trackLengthText)
+                            .keyboardType(.decimalPad)
+                            .focused($focusedField, equals: .length)
+                            .frame(width: 90)
+                    }
+                    .autocorrectionDisabled()
+                    .textInputAutocapitalization(.never)
+                    .padding(12)
+                    .background(.black, in: RoundedRectangle(cornerRadius: 12))
+
+                    HStack(spacing: 10) {
+                        TextField("整体宽米", text: $trackWidthText)
+                            .keyboardType(.decimalPad)
+                            .focused($focusedField, equals: .width)
+                        TextField("整体高米", text: $trackHeightText)
+                            .keyboardType(.decimalPad)
+                            .focused($focusedField, equals: .height)
+                    }
+                    .autocorrectionDisabled()
+                    .textInputAutocapitalization(.never)
+                    .padding(12)
+                    .background(.black, in: RoundedRectangle(cornerRadius: 12))
+
+                    imageTraceArea
+
+                    Text(message)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+
+                    Button {
+                        focusedField = nil
+                        generateTrackFromTrace()
+                    } label: {
+                        Label("按描线生成并导入", systemImage: "point.topleft.down.curvedto.point.bottomright.up")
                             .frame(maxWidth: .infinity)
                     }
                     .buttonStyle(.liquidGlassProminent)
-                    Button("撤销") { if !tracedPoints.isEmpty { tracedPoints.removeLast(); updateTraceMessage() } }
-                        .buttonStyle(.liquidGlass)
-                    Button("清空") { tracedPoints.removeAll(); updateTraceMessage() }
-                        .buttonStyle(.liquidGlass)
+                    .disabled(selectedImage == nil || tracedPoints.count < 8)
                 }
-
-                HStack(spacing: 10) {
-                    TextField("赛道名称", text: $trackName)
-                    TextField("长度米", text: $trackLengthText)
-                        .keyboardType(.decimalPad)
-                        .frame(width: 90)
-                }
-                .autocorrectionDisabled()
-                .textInputAutocapitalization(.never)
-                .padding(12)
-                .background(.black, in: RoundedRectangle(cornerRadius: 12))
-
-                HStack(spacing: 10) {
-                    TextField("整体宽米", text: $trackWidthText)
-                        .keyboardType(.decimalPad)
-                    TextField("整体高米", text: $trackHeightText)
-                        .keyboardType(.decimalPad)
-                }
-                .autocorrectionDisabled()
-                .textInputAutocapitalization(.never)
-                .padding(12)
-                .background(.black, in: RoundedRectangle(cornerRadius: 12))
-
-                imageTraceArea
-
-                Text(message)
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-
-                Button {
-                    generateTrackFromTrace()
-                } label: {
-                    Label("按描线生成并导入", systemImage: "point.topleft.down.curvedto.point.bottomright.up")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.liquidGlassProminent)
-                .disabled(selectedImage == nil || tracedPoints.count < 8)
+                .padding()
             }
-            .padding()
             .background(.black)
             .navigationTitle("图片描线生成")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .navigationBarTrailing) { Button("关闭") { dismiss() } } }
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) { Button("关闭") { dismiss() } }
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    Button("完成") { focusedField = nil }
+                }
+            }
             .onChange(of: selectedPhoto) { newValue in Task { await loadPhoto(newValue) } }
             .alert("生成失败", isPresented: Binding(get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } })) {
                 Button("知道了", role: .cancel) {}

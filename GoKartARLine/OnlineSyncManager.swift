@@ -377,10 +377,15 @@ struct OnlineCenterView: View {
 private struct OnlineRegisterView: View {
     @EnvironmentObject private var online: OnlineSyncManager
     @Environment(\.dismiss) private var dismiss
+    @FocusState private var focusedField: RegisterField?
     @State private var username = ""
     @State private var password = ""
     @State private var email = ""
     @State private var code = ""
+
+    private enum RegisterField {
+        case username, email, password, code
+    }
 
     var body: some View {
         NavigationStack {
@@ -392,17 +397,22 @@ private struct OnlineRegisterView: View {
                     TextField("用户名", text: $username)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
+                        .focused($focusedField, equals: .username)
                     TextField("邮箱", text: $email)
                         .textInputAutocapitalization(.never)
                         .keyboardType(.emailAddress)
                         .autocorrectionDisabled()
+                        .focused($focusedField, equals: .email)
                     SecureField("密码", text: $password)
+                        .focused($focusedField, equals: .password)
                     HStack {
                         TextField("邮箱验证码", text: $code)
                             .keyboardType(.numberPad)
+                            .focused($focusedField, equals: .code)
                         Button("获取验证码") { Task { await online.requestCode(email: email) } }
                     }
                     Button("完成注册") {
+                        focusedField = nil
                         Task {
                             await online.register(username: username, password: password, email: email, code: code)
                             if online.isLoggedIn { dismiss() }
@@ -415,7 +425,13 @@ private struct OnlineRegisterView: View {
             .background(.black)
             .tint(.white)
             .navigationTitle("注册")
-            .toolbar { ToolbarItem(placement: .navigationBarTrailing) { Button("返回登录") { dismiss() } } }
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) { Button("返回登录") { dismiss() } }
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    Button("完成") { focusedField = nil }
+                }
+            }
             .buttonStyle(.liquidGlass)
             .alert("在线", isPresented: Binding(get: { online.message != nil }, set: { if !$0 { online.message = nil } })) {
                 Button("知道了", role: .cancel) {}
