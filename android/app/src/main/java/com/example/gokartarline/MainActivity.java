@@ -1429,8 +1429,11 @@ public class MainActivity extends Activity {
             LinearLayout mode = new LinearLayout(context);
             Button move = addButton(mode, "移动缩放", v -> { canvas.drawMode = false; canvas.invalidate(); });
             Button draw = addButton(mode, "绘制", v -> { canvas.drawMode = true; canvas.invalidate(); });
+            addButton(mode, "放大", v -> canvas.zoomIn());
+            addButton(mode, "缩小", v -> canvas.zoomOut());
             addView(mode, new LinearLayout.LayoutParams(-1, dp(62)));
             canvas = new DrawCanvas(context);
+            if (latestLocation != null) canvas.setCenterWgs(latestLocation.getLatitude(), latestLocation.getLongitude());
             LinearLayout.LayoutParams canvasLp = new LinearLayout.LayoutParams(-1, 0, 1);
             canvasLp.setMargins(0, dp(8), 0, dp(8));
             addView(canvas, canvasLp);
@@ -1459,25 +1462,318 @@ public class MainActivity extends Activity {
             });
         }
 
-        void searchPlace() { try { List<Address> list = new Geocoder(MainActivity.this).getFromLocationName(search.getText().toString(), 1); if (list != null && !list.isEmpty()) { canvas.centerLat = list.get(0).getLatitude(); canvas.centerLon = list.get(0).getLongitude(); message.setText("已定位到：" + (list.get(0).getFeatureName() == null ? search.getText().toString() : list.get(0).getFeatureName()) + "。切到绘制模式后描出赛道。"); } } catch (Exception e) { toast("搜索失败：" + e.getMessage()); } }
+        void searchPlace() { try { List<Address> list = new Geocoder(MainActivity.this).getFromLocationName(search.getText().toString(), 1); if (list != null && !list.isEmpty()) { canvas.setCenterWgs(list.get(0).getLatitude(), list.get(0).getLongitude()); message.setText("已定位到：" + (list.get(0).getFeatureName() == null ? search.getText().toString() : list.get(0).getFeatureName()) + "。切到绘制模式后描出赛道。"); } } catch (Exception e) { toast("搜索失败：" + e.getMessage()); } }
         void generateFromDrawing() { if (!canvas.closed()) { toast("赛道必须首尾相接后才能生成"); return; } message.setText("AI正在根据地图轨迹生成速度和刹车区。"); ArrayList<TrackPoint> pts = canvas.toTrackPoints(); new Thread(() -> { try { TrackData t = callAIForBrakeZones(pts); runOnUiThread(() -> { addTrack(t); backHome(); }); } catch (Exception e) { TrackData t = new TrackData(); t.name = trackName.getText().toString().trim().isEmpty() ? "地图绘制赛道" : trackName.getText().toString().trim(); t.points.addAll(pts); t.length = computeLength(pts); markLocalBrakeZones(t.points); runOnUiThread(() -> { addTrack(t); toast("AI失败，已生成本地刹车区"); backHome(); }); } }).start(); }
     }
 
     final class DrawCanvas extends View {
         final Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
-        final ArrayList<PointF> drawn = new ArrayList<>();
+        final ArrayList<TrackPoint> drawn = new ArrayList<>();
+        final Map<String, Bitmap> tileCache = new HashMap<>();
+        final Set<String> loadingTiles = new HashSet<>();
+        final Set<String> failedTiles = new HashSet<>();
+        final int tileSize = 256;
         double centerLat = 31.2304, centerLon = 121.4737;
+        int zoom = 18;
         boolean drawMode = false;
+        float lastTouchX, lastTouchY, lastSpan;
 
-        DrawCanvas(Context context) { super(context); p.setStrokeWidth(dp(5)); p.setStrokeCap(Paint.Cap.ROUND); p.setStrokeJoin(Paint.Join.ROUND); }
-        protected void onDraw(Canvas canvas) { canvas.drawColor(Color.rgb(8, 8, 8)); p.setStyle(Paint.Style.FILL); p.setTextSize(dp(18)); p.setColor(Color.WHITE); canvas.drawText(drawMode ? "绘制赛道线" : "移动缩放地图", dp(18), dp(32), p); canvas.drawText("点数：" + drawn.size() + " · 长度：" + (int) computeLength(toTrackPoints()) + "m · " + (closed() ? "已首尾相接" : "未闭合"), dp(18), dp(58), p); p.setStyle(Paint.Style.STROKE); p.setStrokeWidth(dp(5)); p.setColor(Color.rgb(0, 255, 70)); for (int i = 1; i < drawn.size(); i++) canvas.drawLine(drawn.get(i - 1).x, drawn.get(i - 1).y, drawn.get(i).x, drawn.get(i).y, p); }
-        public boolean onTouchEvent(android.view.MotionEvent event) { if (!drawMode) return true; if (event.getAction() == android.view.MotionEvent.ACTION_DOWN || event.getAction() == android.view.MotionEvent.ACTION_MOVE) { PointF pt = new PointF(event.getX(), event.getY()); if (drawn.isEmpty() || dist(drawn.get(drawn.size() - 1), pt) > dp(2)) { drawn.add(pt); invalidate(); } return true; } return true; }
+        DrawCanvas(Context context) {
+            super(context);
+            p.setStrokeWidth(dp(5));
+            p.setStrokeCap(Paint.Cap.ROUND);
+            p.setStrokeJoin(Paint.Join.ROUND);
+        }
+
+        void setCenterWgs(double latitude, double longitude) {
+            centerLat = latitude;
+            centerLon = longitude;
+            invalidate();
+        }
+
+        void zoomIn() {
+            zoom = Math.min(20, zoom + 1);
+            invalidate();
+        }
+
+        void zoomOut() {
+            zoom = Math.max(3, zoom - 1);
+            invalidate();
+        }
+
+        protected void onDraw(Canvas canvas) {
+            drawMapTiles(canvas);
+            drawTrack(canvas);
+            drawMapHud(canvas);
+        }
+
+        private void drawMapTiles(Canvas canvas) {
+            canvas.drawColor(Color.rgb(18, 18, 18));
+            if (getWidth() <= 0 || getHeight() <= 0) return;
+            double[] displayCenter = wgsToGcj(centerLat, centerLon);
+            double centerX = lonToPixelX(displayCenter[1], zoom);
+            double centerY = latToPixelY(displayCenter[0], zoom);
+            double leftWorld = centerX - getWidth() / 2.0;
+            double topWorld = centerY - getHeight() / 2.0;
+            int minTileX = (int) Math.floor(leftWorld / tileSize);
+            int maxTileX = (int) Math.floor((leftWorld + getWidth()) / tileSize);
+            int minTileY = (int) Math.floor(topWorld / tileSize);
+            int maxTileY = (int) Math.floor((topWorld + getHeight()) / tileSize);
+            int tileCount = 1 << zoom;
+            boolean drewTile = false;
+            p.setStyle(Paint.Style.FILL);
+            for (int tileX = minTileX; tileX <= maxTileX; tileX++) {
+                int wrappedX = ((tileX % tileCount) + tileCount) % tileCount;
+                for (int tileY = minTileY; tileY <= maxTileY; tileY++) {
+                    if (tileY < 0 || tileY >= tileCount) continue;
+                    String key = zoom + "/" + wrappedX + "/" + tileY;
+                    Bitmap bitmap;
+                    synchronized (tileCache) {
+                        bitmap = tileCache.get(key);
+                    }
+                    float drawX = (float) (tileX * tileSize - leftWorld);
+                    float drawY = (float) (tileY * tileSize - topWorld);
+                    if (bitmap != null) {
+                        canvas.drawBitmap(bitmap, drawX, drawY, null);
+                        drewTile = true;
+                    } else {
+                        p.setColor(Color.rgb(28, 28, 28));
+                        canvas.drawRect(drawX, drawY, drawX + tileSize, drawY + tileSize, p);
+                        requestTile(key, zoom, wrappedX, tileY);
+                    }
+                }
+            }
+            if (!drewTile) {
+                p.setColor(Color.argb(210, 255, 255, 255));
+                p.setTextSize(dp(16));
+                canvas.drawText("正在加载地图瓦片…若一直黑屏，请检查网络", dp(18), getHeight() - dp(18), p);
+            }
+        }
+
+        private void drawTrack(Canvas canvas) {
+            if (drawn.isEmpty()) return;
+            p.setStyle(Paint.Style.STROKE);
+            p.setStrokeWidth(dp(5));
+            p.setColor(Color.rgb(0, 255, 70));
+            for (int i = 1; i < drawn.size(); i++) {
+                PointF previous = screenPointFor(drawn.get(i - 1));
+                PointF current = screenPointFor(drawn.get(i));
+                canvas.drawLine(previous.x, previous.y, current.x, current.y, p);
+            }
+            p.setStyle(Paint.Style.FILL);
+            for (int i = 0; i < drawn.size(); i++) {
+                PointF point = screenPointFor(drawn.get(i));
+                p.setColor(i == 0 ? Color.RED : Color.rgb(0, 255, 70));
+                canvas.drawCircle(point.x, point.y, i == 0 ? dp(7) : dp(4), p);
+            }
+        }
+
+        private void drawMapHud(Canvas canvas) {
+            p.setStyle(Paint.Style.FILL);
+            p.setColor(Color.argb(185, 0, 0, 0));
+            RectF panel = new RectF(dp(10), dp(8), Math.min(getWidth() - dp(10), dp(540)), dp(72));
+            canvas.drawRoundRect(panel, dp(12), dp(12), p);
+            p.setTextSize(dp(17));
+            p.setColor(Color.WHITE);
+            canvas.drawText(drawMode ? "绘制赛道线" : "移动缩放地图（拖动/双指缩放）", dp(18), dp(32), p);
+            canvas.drawText("点数：" + drawn.size() + " · 长度：" + (int) computeLength(toTrackPoints()) + "m · 缩放：" + zoom + " · " + (closed() ? "已首尾相接" : "未闭合"), dp(18), dp(58), p);
+        }
+
+        public boolean onTouchEvent(android.view.MotionEvent event) {
+            if (drawMode) return handleDrawTouch(event);
+            return handleMoveTouch(event);
+        }
+
+        private boolean handleDrawTouch(android.view.MotionEvent event) {
+            if (event.getAction() == android.view.MotionEvent.ACTION_DOWN || event.getAction() == android.view.MotionEvent.ACTION_MOVE) {
+                TrackPoint point = trackPointForScreen(event.getX(), event.getY());
+                if (drawn.isEmpty() || distanceMeters(drawn.get(drawn.size() - 1), point) > 1.0) {
+                    drawn.add(point);
+                    invalidate();
+                }
+                return true;
+            }
+            return true;
+        }
+
+        private boolean handleMoveTouch(android.view.MotionEvent event) {
+            if (event.getPointerCount() >= 2) {
+                float dx = event.getX(0) - event.getX(1);
+                float dy = event.getY(0) - event.getY(1);
+                float span = (float) Math.hypot(dx, dy);
+                if (event.getActionMasked() == android.view.MotionEvent.ACTION_POINTER_DOWN || lastSpan <= 0) {
+                    lastSpan = span;
+                    return true;
+                }
+                if (event.getActionMasked() == android.view.MotionEvent.ACTION_MOVE && span > 0) {
+                    if (span / lastSpan > 1.25f) { zoomIn(); lastSpan = span; }
+                    else if (lastSpan / span > 1.25f) { zoomOut(); lastSpan = span; }
+                }
+                return true;
+            }
+            switch (event.getActionMasked()) {
+                case android.view.MotionEvent.ACTION_DOWN:
+                    lastTouchX = event.getX();
+                    lastTouchY = event.getY();
+                    lastSpan = 0;
+                    return true;
+                case android.view.MotionEvent.ACTION_MOVE:
+                    panBy(event.getX() - lastTouchX, event.getY() - lastTouchY);
+                    lastTouchX = event.getX();
+                    lastTouchY = event.getY();
+                    return true;
+                default:
+                    return true;
+            }
+        }
+
+        private void panBy(float deltaX, float deltaY) {
+            double[] displayCenter = wgsToGcj(centerLat, centerLon);
+            double centerX = lonToPixelX(displayCenter[1], zoom) - deltaX;
+            double centerY = latToPixelY(displayCenter[0], zoom) - deltaY;
+            double displayLon = pixelXToLon(centerX, zoom);
+            double displayLat = pixelYToLat(centerY, zoom);
+            double[] wgs = gcjToWgs(displayLat, displayLon);
+            centerLat = wgs[0];
+            centerLon = wgs[1];
+            invalidate();
+        }
+
         void undo() { if (!drawn.isEmpty()) { drawn.remove(drawn.size() - 1); invalidate(); } }
         void clear() { drawn.clear(); invalidate(); }
-        void closeLoop() { if (drawn.size() > 2) { drawn.add(new PointF(drawn.get(0).x, drawn.get(0).y)); invalidate(); } }
-        boolean closed() { return drawn.size() > 3 && dist(drawn.get(0), drawn.get(drawn.size() - 1)) < dp(20); }
-        float dist(PointF a, PointF b) { return (float) Math.hypot(a.x - b.x, a.y - b.y); }
-        ArrayList<TrackPoint> toTrackPoints() { ArrayList<TrackPoint> out = new ArrayList<>(); double mpp = 0.5, latScale = 111320.0, lonScale = Math.max(Math.cos(Math.toRadians(centerLat)) * 111320.0, 1); for (PointF pt : drawn) { double east = (pt.x - getWidth() / 2.0) * mpp; double north = (getHeight() / 2.0 - pt.y) * mpp; out.add(new TrackPoint(centerLat + north / latScale, centerLon + east / lonScale, 60, "green")); } return out; }
+        void closeLoop() { if (drawn.size() > 2) { TrackPoint first = drawn.get(0); drawn.add(new TrackPoint(first.latitude, first.longitude, first.speed, first.color)); invalidate(); } }
+        boolean closed() { return drawn.size() > 3 && distanceMeters(drawn.get(0), drawn.get(drawn.size() - 1)) < 20; }
+        ArrayList<TrackPoint> toTrackPoints() { return new ArrayList<>(drawn); }
+
+        private PointF screenPointFor(TrackPoint point) {
+            double[] displayCenter = wgsToGcj(centerLat, centerLon);
+            double[] displayPoint = wgsToGcj(point.latitude, point.longitude);
+            double centerX = lonToPixelX(displayCenter[1], zoom);
+            double centerY = latToPixelY(displayCenter[0], zoom);
+            double pointX = lonToPixelX(displayPoint[1], zoom);
+            double pointY = latToPixelY(displayPoint[0], zoom);
+            return new PointF((float) (pointX - centerX + getWidth() / 2.0), (float) (pointY - centerY + getHeight() / 2.0));
+        }
+
+        private TrackPoint trackPointForScreen(float x, float y) {
+            double[] displayCenter = wgsToGcj(centerLat, centerLon);
+            double centerX = lonToPixelX(displayCenter[1], zoom);
+            double centerY = latToPixelY(displayCenter[0], zoom);
+            double displayLon = pixelXToLon(centerX + x - getWidth() / 2.0, zoom);
+            double displayLat = pixelYToLat(centerY + y - getHeight() / 2.0, zoom);
+            double[] wgs = gcjToWgs(displayLat, displayLon);
+            return new TrackPoint(wgs[0], wgs[1], 60, "green");
+        }
+
+        private void requestTile(String key, int z, int x, int y) {
+            synchronized (tileCache) {
+                if (tileCache.containsKey(key) || loadingTiles.contains(key) || failedTiles.contains(key)) return;
+                loadingTiles.add(key);
+            }
+            new Thread(() -> {
+                Bitmap bitmap = null;
+                try {
+                    bitmap = downloadTile(tileUrl(z, x, y));
+                    if (bitmap == null) bitmap = downloadTile(roadTileUrl(z, x, y));
+                } catch (Exception ignored) {}
+                synchronized (tileCache) {
+                    loadingTiles.remove(key);
+                    if (bitmap != null) {
+                        if (tileCache.size() > 260) tileCache.clear();
+                        tileCache.put(key, bitmap);
+                    } else {
+                        failedTiles.add(key);
+                    }
+                }
+                post(this::invalidate);
+            }).start();
+        }
+
+        private Bitmap downloadTile(String urlText) {
+            HttpURLConnection connection = null;
+            try {
+                connection = (HttpURLConnection) new URL(urlText).openConnection();
+                connection.setConnectTimeout(6000);
+                connection.setReadTimeout(8000);
+                connection.setRequestProperty("User-Agent", "GoKartARLine Android");
+                if (connection.getResponseCode() < 200 || connection.getResponseCode() >= 300) return null;
+                try (InputStream inputStream = connection.getInputStream()) {
+                    return BitmapFactory.decodeStream(inputStream);
+                }
+            } catch (Exception ignored) {
+                return null;
+            } finally {
+                if (connection != null) connection.disconnect();
+            }
+        }
+
+        private String tileUrl(int z, int x, int y) {
+            int server = Math.abs(x + y) % 4 + 1;
+            return "https://webst0" + server + ".is.autonavi.com/appmaptile?style=6&x=" + x + "&y=" + y + "&z=" + z;
+        }
+
+        private String roadTileUrl(int z, int x, int y) {
+            int server = Math.abs(x + y) % 4 + 1;
+            return "https://webrd0" + server + ".is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=7&x=" + x + "&y=" + y + "&z=" + z;
+        }
+
+        private double lonToPixelX(double lon, int z) { return (lon + 180.0) / 360.0 * tileSize * (1 << z); }
+        private double latToPixelY(double lat, int z) {
+            double safeLat = Math.max(-85.05112878, Math.min(85.05112878, lat));
+            double sin = Math.sin(Math.toRadians(safeLat));
+            return (0.5 - Math.log((1 + sin) / (1 - sin)) / (4 * Math.PI)) * tileSize * (1 << z);
+        }
+        private double pixelXToLon(double x, int z) { return x / (tileSize * (1 << z)) * 360.0 - 180.0; }
+        private double pixelYToLat(double y, int z) {
+            double n = Math.PI - 2.0 * Math.PI * y / (tileSize * (1 << z));
+            return Math.toDegrees(Math.atan(Math.sinh(n)));
+        }
+
+        private boolean outOfChina(double lat, double lon) {
+            return lon < 72.004 || lon > 137.8347 || lat < 0.8293 || lat > 55.8271;
+        }
+
+        private double transformLat(double x, double y) {
+            double ret = -100.0 + 2.0 * x + 3.0 * y + 0.2 * y * y + 0.1 * x * y + 0.2 * Math.sqrt(Math.abs(x));
+            ret += (20.0 * Math.sin(6.0 * x * Math.PI) + 20.0 * Math.sin(2.0 * x * Math.PI)) * 2.0 / 3.0;
+            ret += (20.0 * Math.sin(y * Math.PI) + 40.0 * Math.sin(y / 3.0 * Math.PI)) * 2.0 / 3.0;
+            ret += (160.0 * Math.sin(y / 12.0 * Math.PI) + 320 * Math.sin(y * Math.PI / 30.0)) * 2.0 / 3.0;
+            return ret;
+        }
+
+        private double transformLon(double x, double y) {
+            double ret = 300.0 + x + 2.0 * y + 0.1 * x * x + 0.1 * x * y + 0.1 * Math.sqrt(Math.abs(x));
+            ret += (20.0 * Math.sin(6.0 * x * Math.PI) + 20.0 * Math.sin(2.0 * x * Math.PI)) * 2.0 / 3.0;
+            ret += (20.0 * Math.sin(x * Math.PI) + 40.0 * Math.sin(x / 3.0 * Math.PI)) * 2.0 / 3.0;
+            ret += (150.0 * Math.sin(x / 12.0 * Math.PI) + 300.0 * Math.sin(x / 30.0 * Math.PI)) * 2.0 / 3.0;
+            return ret;
+        }
+
+        private double[] deltaGcj(double lat, double lon) {
+            double a = 6378245.0;
+            double ee = 0.00669342162296594323;
+            double dLat = transformLat(lon - 105.0, lat - 35.0);
+            double dLon = transformLon(lon - 105.0, lat - 35.0);
+            double radLat = lat / 180.0 * Math.PI;
+            double magic = Math.sin(radLat);
+            magic = 1 - ee * magic * magic;
+            double sqrtMagic = Math.sqrt(magic);
+            dLat = (dLat * 180.0) / ((a * (1 - ee)) / (magic * sqrtMagic) * Math.PI);
+            dLon = (dLon * 180.0) / (a / sqrtMagic * Math.cos(radLat) * Math.PI);
+            return new double[]{dLat, dLon};
+        }
+
+        private double[] wgsToGcj(double lat, double lon) {
+            if (outOfChina(lat, lon)) return new double[]{lat, lon};
+            double[] delta = deltaGcj(lat, lon);
+            return new double[]{lat + delta[0], lon + delta[1]};
+        }
+
+        private double[] gcjToWgs(double lat, double lon) {
+            if (outOfChina(lat, lon)) return new double[]{lat, lon};
+            double[] delta = deltaGcj(lat, lon);
+            return new double[]{lat - delta[0], lon - delta[1]};
+        }
     }
 
     final class ImagePointView extends View {
