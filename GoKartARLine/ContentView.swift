@@ -17,7 +17,7 @@ struct ContentView: View {
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
-            ARViewContainer(track: trackDataManager.selectedTrack, originCoordinate: locationManager.originCoordinate, fusedPose: locationManager.fusedPose, settings: settings, mapHeadingOffsetDegrees: locationManager.mapHeadingOffsetDegrees, isCameraActive: isMainInterfaceActive)
+            ARViewContainer(track: trackDataManager.selectedTrack, originCoordinate: locationManager.originCoordinate, fusedPose: locationManager.renderPose(for: trackDataManager.selectedTrack), settings: settings, mapHeadingOffsetDegrees: locationManager.mapHeadingOffsetDegrees, isTrackDirectionReversed: locationManager.isTrackDirectionReversed, isCameraActive: isMainInterfaceActive)
                 .ignoresSafeArea()
             VStack(spacing: 12) {
                 topHUD
@@ -69,7 +69,7 @@ struct ContentView: View {
             Button("导入") { isImporting = true }
             Button("赛道") { showingTrackList = true }
             Button("在线") { showingOnline = true }
-            Button("校准") { locationManager.manualCalibrate(using: trackDataManager.selectedTrack) }
+            Button("智能校准") { locationManager.smartCalibrate(using: trackDataManager.selectedTrack) }
             Button(isRecording ? "停止" : "录屏") { toggleRecording() }
             Button("截图") { NotificationCenter.default.post(name: .captureARStillImage, object: nil) }
             Button("设置") { showingSettings = true }
@@ -162,7 +162,6 @@ private struct TrackListView: View {
     @State private var newName = ""
     @State private var showingAITrackGenerator = false
     @State private var showingMapTrackDrawer = false
-    @State private var calibratingTrack: TrackData?
 
     var body: some View {
         NavigationStack {
@@ -170,7 +169,8 @@ private struct TrackListView: View {
                 ForEach(manager.tracks) { track in
                     Button {
                         manager.selectedTrackID = track.id
-                        calibratingTrack = track
+                        locationManager.smartCalibrate(using: track)
+                        dismiss()
                     } label: {
                         VStack(alignment: .leading) {
                             Text(track.trackName).font(.headline)
@@ -211,13 +211,6 @@ private struct TrackListView: View {
                 MapTrackDrawingView()
                     .environmentObject(manager)
                     .environmentObject(locationManager)
-            }
-            .sheet(item: $calibratingTrack) { track in
-                TrackMapCalibrationView(track: track) { coordinate, heading in
-                    manager.selectedTrackID = track.id
-                    locationManager.applyMapCalibration(coordinate: coordinate, headingDegrees: heading)
-                    dismiss()
-                }
             }
             .alert("重命名赛道", isPresented: Binding(get: { renamingTrack != nil }, set: { if !$0 { renamingTrack = nil } })) {
                 TextField("赛道名称", text: $newName)

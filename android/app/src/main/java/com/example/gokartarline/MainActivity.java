@@ -62,6 +62,8 @@ public class MainActivity extends Activity {
     private boolean powerSavingMode = false;
     private boolean disableDepthTest = true;
     private boolean metricUnits = true;
+    private boolean smartCalibrationActive = true;
+    private boolean trackDirectionReversed = false;
     private int gpsAccuracyIndex = 0;
     private boolean isMainScreen = true;
     private boolean isRecording = false;
@@ -98,6 +100,8 @@ public class MainActivity extends Activity {
         powerSavingMode = prefs.getBoolean("powerSaving", false);
         disableDepthTest = prefs.getBoolean("disableDepthTest", true);
         metricUnits = prefs.getBoolean("metricUnits", true);
+        smartCalibrationActive = prefs.getBoolean("smartCalibrationActive", true);
+        trackDirectionReversed = prefs.getBoolean("trackDirectionReversed", false);
         gpsAccuracyIndex = prefs.getInt("gpsAccuracy", 0);
         onlineBaseUrl = prefs.getString("onlineBaseUrl", DEFAULT_ONLINE_BASE_URL);
         onlineToken = prefs.getString("onlineToken", "");
@@ -500,7 +504,7 @@ public class MainActivity extends Activity {
         if (locationService == null) locationService = (android.location.LocationManager) getSystemService(LOCATION_SERVICE);
         if (locationListener == null) {
             locationListener = new LocationListener() {
-                @Override public void onLocationChanged(Location location) { latestLocation = location; updateHud(); handleLapTelemetry(location); }
+                @Override public void onLocationChanged(Location location) { latestLocation = location; refreshSmartCalibration(false); updateHud(); handleLapTelemetry(location); }
                 @Override public void onStatusChanged(String provider, int status, Bundle extras) {}
                 @Override public void onProviderEnabled(String provider) {}
                 @Override public void onProviderDisabled(String provider) {}
@@ -513,6 +517,7 @@ public class MainActivity extends Activity {
             float distance = gpsAccuracyIndex == 2 ? 10f : 0f;
             locationService.requestLocationUpdates(provider, interval, distance, locationListener);
             latestLocation = locationService.getLastKnownLocation(provider);
+            refreshSmartCalibration(false);
             updateHud();
         } catch (Exception e) { toast("定位失败：" + e.getMessage()); }
     }
@@ -555,9 +560,36 @@ public class MainActivity extends Activity {
 
     private void manualCalibrate() {
         if (selectedTrack < 0 || selectedTrack >= tracks.size()) { toast("没有可用于校准的赛道"); return; }
-        if (latestLocation != null) toast("已按当前位置手动校准");
-        else toast("已按赛道起点校准");
+        refreshSmartCalibration(true);
         updateHud();
+    }
+
+    private void refreshSmartCalibration(boolean notifyUser) {
+        if (selectedTrack < 0 || selectedTrack >= tracks.size()) return;
+        TrackData track = tracks.get(selectedTrack);
+        if (track.points.size() < 2) return;
+        smartCalibrationActive = true;
+        if (latestLocation == null) {
+            saveCalibrationState();
+            if (notifyUser) toast("等待GPS后自动吸附到最近赛道线");
+            return;
+        }
+        TrackPoint current = new TrackPoint(latestLocation.getLatitude(), latestLocation.getLongitude(), 0, "green");
+        TrackProjection projection = nearestProjection(current, track.points);
+        if (projection == null) return;
+        if (latestLocation.hasBearing()) {
+            trackDirectionReversed = angleDeltaDegrees(latestLocation.getBearing(), projection.headingDegrees) > 90;
+        }
+        saveCalibrationState();
+        if (overlay != null) overlay.invalidate();
+        if (notifyUser) toast("智能校准完成：已吸附最近赛道线，偏离" + (int) projection.distanceMeters + "m");
+    }
+
+    private void saveCalibrationState() {
+        prefs.edit()
+                .putBoolean("smartCalibrationActive", smartCalibrationActive)
+                .putBoolean("trackDirectionReversed", trackDirectionReversed)
+                .apply();
     }
 
     private void captureStillImage() {
@@ -1002,7 +1034,7 @@ public class MainActivity extends Activity {
         texts.addView(name);
         texts.addView(meta);
         row.addView(texts, new LinearLayout.LayoutParams(0, -2, 1));
-        Button select = addButton(row, "选择", v -> { selectTrack(index); showMapCalibration(index); });
+        Button select = addButton(row, "选择", v -> { selectTrack(index); refreshSmartCalibration(true); closeOpenDialogs(); });
         Button rename = addButton(row, "重命名", v -> renameTrack(index));
         Button delete = addButton(row, "删除", v -> { deleteTrack(index); closeOpenDialogs(); showTrackList(); });
         select.setMinWidth(dp(86));
@@ -1301,6 +1333,10 @@ public class MainActivity extends Activity {
     private double lineDeviationMeters(Location location, TrackData track) { return lineDeviationMeters(new TrackPoint(location.getLatitude(), location.getLongitude(), 0, "green"), track.points); }
     private double lineDeviationMeters(TrackPoint point, List<TrackPoint> points) { if (points.size() < 2) return 0; double best = Double.MAX_VALUE; for (int i = 1; i < points.size(); i++) best = Math.min(best, distanceToSegmentMeters(point, points.get(i - 1), points.get(i))); return best == Double.MAX_VALUE ? 0 : Math.min(best, 80); }
     private double distanceToSegmentMeters(TrackPoint point, TrackPoint start, TrackPoint end) { double latScale = Math.PI / 180.0 * 6371000.0; double lonScale = latScale * Math.cos(Math.toRadians(point.latitude)); double ax = (start.longitude - point.longitude) * lonScale, ay = (start.latitude - point.latitude) * latScale, bx = (end.longitude - point.longitude) * lonScale, by = (end.latitude - point.latitude) * latScale; double dx = bx - ax, dy = by - ay, lengthSquared = dx * dx + dy * dy; if (lengthSquared <= 0.000001) return distanceMeters(point, start); double t = Math.max(0, Math.min(1, -(ax * dx + ay * dy) / lengthSquared)); double nx = ax + dx * t, ny = ay + dy * t; return Math.sqrt(nx * nx + ny * ny); }
+    private double normalizedDegrees(double degrees) { double value = degrees % 360.0; return value < 0 ? value + 360.0 : value; }
+    private double angleDeltaDegrees(double a, double b) { double delta = Math.abs(normalizedDegrees(a) - normalizedDegrees(b)) % 360.0; return delta > 180 ? 360 - delta : delta; }
+    private double bearingDegrees(TrackPoint start, TrackPoint end) { double lat1 = Math.toRadians(start.latitude), lat2 = Math.toRadians(end.latitude), dLon = Math.toRadians(end.longitude - start.longitude); double y = Math.sin(dLon) * Math.cos(lat2); double x = Math.cos(lat1) * Math.sin(lat2) - Math.sin(lat1) * Math.cos(lat2) * Math.cos(dLon); return normalizedDegrees(Math.toDegrees(Math.atan2(y, x))); }
+    private TrackProjection nearestProjection(TrackPoint point, List<TrackPoint> points) { if (points.size() < 2) return null; double latScale = Math.PI / 180.0 * 6371000.0; double lonScale = latScale * Math.cos(Math.toRadians(point.latitude)); TrackProjection best = null; for (int i = 1; i < points.size(); i++) { TrackPoint start = points.get(i - 1), end = points.get(i); double ax = (start.longitude - point.longitude) * lonScale, ay = (start.latitude - point.latitude) * latScale, bx = (end.longitude - point.longitude) * lonScale, by = (end.latitude - point.latitude) * latScale; double dx = bx - ax, dy = by - ay, lengthSquared = dx * dx + dy * dy; double progress = lengthSquared > 0 ? Math.max(0, Math.min(1, -(ax * dx + ay * dy) / lengthSquared)) : 0; double nearestX = ax + dx * progress, nearestY = ay + dy * progress; double distance = Math.sqrt(nearestX * nearestX + nearestY * nearestY); double latitude = start.latitude + (end.latitude - start.latitude) * progress; double longitude = start.longitude + (end.longitude - start.longitude) * progress; TrackProjection projection = new TrackProjection(i - 1, progress, latitude, longitude, distance, bearingDegrees(start, end)); if (best == null || projection.distanceMeters < best.distanceMeters) best = projection; } return best; }
 
     final class MapDrawerView extends LinearLayout {
         DrawCanvas canvas;
@@ -1878,6 +1914,24 @@ public class MainActivity extends Activity {
         }
     }
 
+    static final class TrackProjection {
+        final int segmentIndex;
+        final double progress;
+        final double latitude;
+        final double longitude;
+        final double distanceMeters;
+        final double headingDegrees;
+
+        TrackProjection(int segmentIndex, double progress, double latitude, double longitude, double distanceMeters, double headingDegrees) {
+            this.segmentIndex = segmentIndex;
+            this.progress = progress;
+            this.latitude = latitude;
+            this.longitude = longitude;
+            this.distanceMeters = distanceMeters;
+            this.headingDegrees = headingDegrees;
+        }
+    }
+
     static final class TelemetrySample {
         final double latitude;
         final double longitude;
@@ -1949,6 +2003,11 @@ public class MainActivity extends Activity {
         }
 
         List<PointF> projectTrack() {
+            if (smartCalibrationActive && latestLocation != null) {
+                TrackPoint current = new TrackPoint(latestLocation.getLatitude(), latestLocation.getLongitude(), 0, "green");
+                TrackProjection projection = nearestProjection(current, track);
+                if (projection != null) return projectTrackFromProjection(projection);
+            }
             TrackPoint origin = track.get(0);
             double latScale = 111320.0;
             double lonScale = Math.max(Math.cos(Math.toRadians(origin.latitude)) * 111320.0, 1.0);
@@ -1969,6 +2028,48 @@ public class MainActivity extends Activity {
                 result.add(new PointF(centerX, startY - getHeight() * 0.55f));
             }
             return result;
+        }
+
+        List<PointF> projectTrackFromProjection(TrackProjection projection) {
+            double latScale = 111320.0;
+            double lonScale = Math.max(Math.cos(Math.toRadians(projection.latitude)) * 111320.0, 1.0);
+            double metersPerPixel = Math.max(renderDistance / Math.max(getHeight() * 0.72, 1), 0.1);
+            float centerX = getWidth() / 2f;
+            float startY = getHeight() * 0.86f;
+            ArrayList<PointF> result = new ArrayList<>();
+            TrackPoint anchor = new TrackPoint(projection.latitude, projection.longitude, 0, "green");
+            double headingRadians = Math.toRadians(trackDirectionReversed ? normalizedDegrees(projection.headingDegrees + 180) : projection.headingDegrees);
+            result.add(new PointF(centerX, startY));
+            int segmentCount = Math.max(track.size() - 1, 1);
+            int segmentIndex = Math.min(Math.max(projection.segmentIndex, 0), segmentCount - 1);
+            TrackPoint previous = anchor;
+            double distance = 0;
+            int guard = 0;
+            while (distance <= renderDistance && guard < track.size() + 2) {
+                int pointIndex = trackDirectionReversed ? segmentIndex : (segmentIndex + 1) % track.size();
+                TrackPoint point = track.get(pointIndex);
+                distance += distanceMeters(previous, point);
+                result.add(projectRelativePoint(point, anchor, headingRadians, latScale, lonScale, metersPerPixel, centerX, startY));
+                previous = point;
+                if (trackDirectionReversed) {
+                    segmentIndex--;
+                    if (segmentIndex < 0) segmentIndex = segmentCount - 1;
+                } else {
+                    segmentIndex++;
+                    if (segmentIndex >= segmentCount) segmentIndex = 0;
+                }
+                guard++;
+            }
+            if (result.size() < 2) result.add(new PointF(centerX, startY - getHeight() * 0.55f));
+            return result;
+        }
+
+        PointF projectRelativePoint(TrackPoint point, TrackPoint anchor, double headingRadians, double latScale, double lonScale, double metersPerPixel, float centerX, float startY) {
+            double east = (point.longitude - anchor.longitude) * lonScale;
+            double north = (point.latitude - anchor.latitude) * latScale;
+            double along = east * Math.sin(headingRadians) + north * Math.cos(headingRadians);
+            double cross = east * Math.cos(headingRadians) - north * Math.sin(headingRadians);
+            return new PointF(centerX + (float) (cross / metersPerPixel), startY - (float) (along / metersPerPixel));
         }
 
         int colorFor(String color, float alpha) {

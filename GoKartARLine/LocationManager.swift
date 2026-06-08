@@ -10,11 +10,14 @@ final class LocationManager: NSObject, ObservableObject {
     @Published var isCalibrated = false
     @Published var originCoordinate: CLLocationCoordinate2D?
     @Published var mapHeadingOffsetDegrees: Double = 0
+    @Published private(set) var isSmartCalibrationEnabled = false
+    @Published private(set) var isTrackDirectionReversed = false
 
     private let locationManager = CLLocationManager()
     private let motionManager = CMMotionManager()
     private var fusionTimer: Timer?
     private var latestLocation: CLLocation?
+    private var latestHeading: CLHeading?
     private var latestMotion: CMDeviceMotion?
     private var kalman = SimplePositionKalmanFilter()
     private var lastStartCrossingAt = Date.distantPast
@@ -64,34 +67,76 @@ final class LocationManager: NSObject, ObservableObject {
     func applyMapCalibration(coordinate: CLLocationCoordinate2D, headingDegrees: Double) {
         originCoordinate = coordinate
         mapHeadingOffsetDegrees = headingDegrees
+        isSmartCalibrationEnabled = false
         isCalibrated = true
         statusMessage = "已按地图选择校准位置和方向"
     }
 
     func manualCalibrate(using track: TrackData?) {
-        if let current = latestLocation?.coordinate {
-            originCoordinate = current
-            isCalibrated = true
-            statusMessage = "已按当前位置手动校准"
-        } else if let start = track?.startCoordinate {
-            originCoordinate = start
-            isCalibrated = true
-            statusMessage = "已按赛道起点校准"
-        } else { statusMessage = "没有可用于校准的位置" }
+        smartCalibrate(using: track)
+    }
+
+    func smartCalibrate(using track: TrackData?) {
+        guard let track, let current = latestLocation?.coordinate else {
+            if let start = track?.startCoordinate {
+                originCoordinate = start
+                isSmartCalibrationEnabled = true
+                isTrackDirectionReversed = false
+                isCalibrated = true
+                statusMessage = "无当前位置，已先使用赛道起点；获取GPS后会自动吸附"
+            } else {
+                statusMessage = "没有可用于校准的位置"
+            }
+            return
+        }
+        guard let projection = GeoConverter.nearestProjection(from: current, along: track.points) else {
+            statusMessage = "赛道点不足，无法智能校准"
+            return
+        }
+        originCoordinate = projection.coordinate
+        mapHeadingOffsetDegrees = 0
+        isSmartCalibrationEnabled = true
+        isTrackDirectionReversed = shouldReverseTrackDirection(trackHeading: projection.headingDegrees)
+        isCalibrated = true
+        kalman.reset(to: latestLocation)
+        statusMessage = "智能校准完成：已吸附到最近赛道线，偏离\(Int(projection.distanceMeters))m"
     }
 
     func autoCalibrateIfNeeded(track: TrackData?) {
         guard let track, let start = track.startCoordinate, let current = latestLocation?.coordinate else { return }
+        if isSmartCalibrationEnabled, let projection = GeoConverter.nearestProjection(from: current, along: track.points) {
+            originCoordinate = projection.coordinate
+            isTrackDirectionReversed = shouldReverseTrackDirection(trackHeading: projection.headingDegrees)
+        }
         let distance = GeoConverter.distanceMeters(from: current, to: start)
         let cooldownPassed = Date().timeIntervalSince(lastStartCrossingAt) > 10.0
         if distance < 5.0, cooldownPassed {
             // 经过起点线时重置AR原点和滤波状态，用每圈的已知位置抵消累计漂移。
-            originCoordinate = start
+            originCoordinate = isSmartCalibrationEnabled ? (GeoConverter.nearestProjection(from: current, along: track.points)?.coordinate ?? start) : start
             isCalibrated = true
             lastStartCrossingAt = Date()
             kalman.reset(to: latestLocation)
-            statusMessage = "经过起点线，已自动修正位置"
+            statusMessage = isSmartCalibrationEnabled ? "经过起点线，智能校准已刷新" : "经过起点线，已自动修正位置"
         }
+    }
+
+    func renderPose(for track: TrackData?) -> FusedPose? {
+        guard var pose = fusedPose else { return nil }
+        guard isSmartCalibrationEnabled, let track, let projection = GeoConverter.nearestProjection(from: pose.coordinate, along: track.points) else { return pose }
+        pose.coordinate = projection.coordinate
+        return pose
+    }
+
+    private func currentHeadingDegrees() -> Double? {
+        if let course = latestLocation?.course, course >= 0 { return course }
+        if let trueHeading = latestHeading?.trueHeading, trueHeading >= 0 { return trueHeading }
+        if let magneticHeading = latestHeading?.magneticHeading, magneticHeading >= 0 { return magneticHeading }
+        return nil
+    }
+
+    private func shouldReverseTrackDirection(trackHeading: Double) -> Bool {
+        guard let heading = currentHeadingDegrees() else { return false }
+        return GeoConverter.angleDeltaDegrees(heading, trackHeading) > 90
     }
 
     private func produceFusedPose() {
@@ -128,6 +173,10 @@ extension LocationManager: CLLocationManagerDelegate {
             if originCoordinate == nil { originCoordinate = location.coordinate }
             if location.horizontalAccuracy > 15 { statusMessage = "GPS信号较弱：±\(Int(location.horizontalAccuracy))m" }
         }
+    }
+
+    nonisolated func locationManager(_ manager: CLLocationManager, didUpdateHeading newHeading: CLHeading) {
+        Task { @MainActor in latestHeading = newHeading }
     }
 
     nonisolated func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {

@@ -17,11 +17,11 @@
 - `GoKartARLine/GoKartARLineApp.swift`：App 入口与强制安全提示
 - `GoKartARLine/ContentView.swift`：主界面、HUD、导入、校准、截图、赛道列表
 - `GoKartARLine/ARViewContainer.swift`：ARSCNView 容器、低延迟 AR 配置、3D 行车线渲染
-- `GoKartARLine/LocationManager.swift`：GPS + IMU 融合、20Hz 简化卡尔曼滤波、自动/手动/地图选择校准
+- `GoKartARLine/LocationManager.swift`：GPS + IMU 融合、20Hz 简化卡尔曼滤波、智能吸附校准
 - `GoKartARLine/TrackDataManager.swift`：JSON/GPX 导入、本地存储、删除、重命名
 - `GoKartARLine/TrackPoint.swift`：数据模型、颜色提示、WGS84 到 UTM 转换
 - `GoKartARLine/SettingsView.swift`：样式、传感器、省电、单位设置
-- `GoKartARLine/TrackMapCalibrationView.swift`：选择赛道时的地图位置与方向校准
+- `GoKartARLine/TrackMapCalibrationView.swift`：旧版地图位置与方向校准视图（保留为备用）
 - `GoKartARLine/OnlineSyncManager.swift`：注册登录、在线地图分享、下载、排行榜、圈速上传
 - `server/`：16781 端口在线服务端，HTTP API/admin 与 UDP 遥测同端口
 - `SampleTrack.json`：包含 120 个轨迹点的示例赛道数据
@@ -80,15 +80,15 @@ JSON 格式：
 
 - 自动起点校准：第一次经过赛道第一个轨迹点附近 5 米内时，App 自动完成全局位置校准。
 - 每圈自动修正：之后每次经过起点线附近，都会重置滤波误差和 AR 原点。
-- 选择赛道校准：点击底部“赛道”并选择某条赛道后，会先进入地图校准页；点击你当前所在位置，拖动方向箭头或滑块设置车头方向，再加载赛道。
-- 手动校准：点击底部“校准”，优先用当前 GPS 位置；无 GPS 时使用赛道起点。
+- 选择赛道校准：点击底部“赛道”并选择某条赛道后，会直接执行智能校准并返回主界面。
+- 智能校准：点击底部“智能校准”或在赛道列表选择赛道后，App 会自动吸附到最近赛道线段，并用当前行驶/罗盘方向判断正反方向；Android 会保存该校准状态。
 
 ## 最佳使用方式
 
 - 默认横屏使用，适合固定在卡丁车上。
 - 手机应牢固固定，不能遮挡驾驶视线。
 - 尽量在室外开阔环境使用，GPS 精度建议优于 ±5 米。
-- 第一次上赛道建议先在“赛道”列表选择赛道并完成地图校准，再低速经过起点让自动校准进一步修正。
+- 第一次上赛道建议先在“赛道”列表选择赛道触发智能校准，再低速经过起点让自动校准进一步修正。
 - 可在“设置”中实时调整行车线透明度、宽度、亮度和 30fps 省电模式。
 
 ## 安全说明

@@ -9,6 +9,7 @@ struct ARViewContainer: UIViewRepresentable {
     var fusedPose: FusedPose?
     var settings: ARLineSettings
     var mapHeadingOffsetDegrees: Double = 0
+    var isTrackDirectionReversed = false
     var isCameraActive = true
 
     func makeCoordinator() -> Coordinator { Coordinator() }
@@ -30,6 +31,7 @@ struct ARViewContainer: UIViewRepresentable {
         context.coordinator.fusedPose = fusedPose
         context.coordinator.settings = settings
         context.coordinator.mapHeadingOffsetDegrees = mapHeadingOffsetDegrees
+        context.coordinator.isTrackDirectionReversed = isTrackDirectionReversed
         context.coordinator.setCameraActive(isCameraActive, for: view)
         context.coordinator.updateSessionIfNeeded(for: view)
         context.coordinator.renderDrivingLine(in: view)
@@ -45,6 +47,7 @@ struct ARViewContainer: UIViewRepresentable {
         var fusedPose: FusedPose?
         var settings = ARLineSettings()
         var mapHeadingOffsetDegrees: Double = 0
+        var isTrackDirectionReversed = false
         private let lineNode = SCNNode()
         private let cameraHeightAboveGround: Float = 1.1
         private var appliedVideoResolution: ARVideoResolution?
@@ -167,7 +170,7 @@ struct ARViewContainer: UIViewRepresentable {
             var distanceAhead: Float = 0
 
             while distanceAhead <= maximumVisibleDistance {
-                let nextIndex = (segmentIndex + 1) % points.count
+                let nextIndex = isTrackDirectionReversed ? segmentIndex : (segmentIndex + 1) % points.count
                 let endPoint = points[nextIndex]
                 let segment = endPoint.position - startPosition
                 let length = segment.length
@@ -184,10 +187,17 @@ struct ARViewContainer: UIViewRepresentable {
                     distanceAhead += length
                 }
 
-                segmentIndex = nextIndex
-                if segmentIndex >= segmentCount { segmentIndex = 0 }
-                startPosition = points[segmentIndex].position
-                startColor = points[segmentIndex].color
+                if isTrackDirectionReversed {
+                    segmentIndex -= 1
+                    if segmentIndex < 0 { segmentIndex = segmentCount - 1 }
+                    startPosition = points[(segmentIndex + 1) % points.count].position
+                    startColor = points[(segmentIndex + 1) % points.count].color
+                } else {
+                    segmentIndex = nextIndex
+                    if segmentIndex >= segmentCount { segmentIndex = 0 }
+                    startPosition = points[segmentIndex].position
+                    startColor = points[segmentIndex].color
+                }
                 if segmentIndex == nearest.segmentIndex { break }
             }
 

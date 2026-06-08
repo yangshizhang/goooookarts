@@ -98,6 +98,14 @@ struct UTMCoordinate: Equatable {
     var hemisphere: Hemisphere
 }
 
+struct TrackCoordinateProjection {
+    var coordinate: CLLocationCoordinate2D
+    var distanceMeters: Double
+    var segmentIndex: Int
+    var progress: Double
+    var headingDegrees: Double
+}
+
 enum GeoConverter {
     /// WGS84经纬度转UTM平面坐标。ARKit以米为单位，因此先转UTM，再相对原点做差。
     static func wgs84ToUTM(latitude: Double, longitude: Double) -> UTMCoordinate {
@@ -131,21 +139,58 @@ enum GeoConverter {
         CLLocation(latitude: lhs.latitude, longitude: lhs.longitude).distance(from: CLLocation(latitude: rhs.latitude, longitude: rhs.longitude))
     }
 
-    static func lineDeviationMeters(from coordinate: CLLocationCoordinate2D, along points: [TrackPoint]) -> Double {
-        guard points.count > 1 else { return 0 }
+    static func bearingDegrees(from start: CLLocationCoordinate2D, to end: CLLocationCoordinate2D) -> Double {
+        let lat1 = start.latitude * .pi / 180
+        let lat2 = end.latitude * .pi / 180
+        let deltaLongitude = (end.longitude - start.longitude) * .pi / 180
+        let y = sin(deltaLongitude) * cos(lat2)
+        let x = cos(lat1) * sin(lat2) - sin(lat1) * cos(lat2) * cos(deltaLongitude)
+        return normalizedDegrees(atan2(y, x) * 180 / .pi)
+    }
+
+    static func normalizedDegrees(_ degrees: Double) -> Double {
+        let value = degrees.truncatingRemainder(dividingBy: 360)
+        return value < 0 ? value + 360 : value
+    }
+
+    static func angleDeltaDegrees(_ lhs: Double, _ rhs: Double) -> Double {
+        let delta = abs(normalizedDegrees(lhs) - normalizedDegrees(rhs)).truncatingRemainder(dividingBy: 360)
+        return delta > 180 ? 360 - delta : delta
+    }
+
+    static func nearestProjection(from coordinate: CLLocationCoordinate2D, along points: [TrackPoint]) -> TrackCoordinateProjection? {
+        guard points.count > 1 else { return nil }
         let current = wgs84ToUTM(latitude: coordinate.latitude, longitude: coordinate.longitude)
-        var best = Double.greatestFiniteMagnitude
+        var best: TrackCoordinateProjection?
         for index in points.indices.dropFirst() {
-            let start = wgs84ToUTM(latitude: points[index - 1].latitude, longitude: points[index - 1].longitude)
-            let end = wgs84ToUTM(latitude: points[index].latitude, longitude: points[index].longitude)
+            let startPoint = points[index - 1]
+            let endPoint = points[index]
+            let start = wgs84ToUTM(latitude: startPoint.latitude, longitude: startPoint.longitude)
+            let end = wgs84ToUTM(latitude: endPoint.latitude, longitude: endPoint.longitude)
             let dx = end.easting - start.easting
             let dy = end.northing - start.northing
             let lengthSquared = dx * dx + dy * dy
-            let t = lengthSquared > 0 ? max(0, min(1, ((current.easting - start.easting) * dx + (current.northing - start.northing) * dy) / lengthSquared)) : 0
-            let nearestX = start.easting + dx * t
-            let nearestY = start.northing + dy * t
-            best = min(best, hypot(current.easting - nearestX, current.northing - nearestY))
+            let progress = lengthSquared > 0 ? max(0, min(1, ((current.easting - start.easting) * dx + (current.northing - start.northing) * dy) / lengthSquared)) : 0
+            let nearestX = start.easting + dx * progress
+            let nearestY = start.northing + dy * progress
+            let distance = hypot(current.easting - nearestX, current.northing - nearestY)
+            let projected = CLLocationCoordinate2D(
+                latitude: startPoint.latitude + (endPoint.latitude - startPoint.latitude) * progress,
+                longitude: startPoint.longitude + (endPoint.longitude - startPoint.longitude) * progress
+            )
+            let projection = TrackCoordinateProjection(
+                coordinate: projected,
+                distanceMeters: distance,
+                segmentIndex: index - 1,
+                progress: progress,
+                headingDegrees: bearingDegrees(from: startPoint.coordinate, to: endPoint.coordinate)
+            )
+            if best == nil || projection.distanceMeters < best!.distanceMeters { best = projection }
         }
-        return best.isFinite ? min(best, 80) : 0
+        return best
+    }
+
+    static func lineDeviationMeters(from coordinate: CLLocationCoordinate2D, along points: [TrackPoint]) -> Double {
+        min(nearestProjection(from: coordinate, along: points)?.distanceMeters ?? 0, 80)
     }
 }
