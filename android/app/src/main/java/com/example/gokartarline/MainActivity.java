@@ -1437,43 +1437,17 @@ public class MainActivity extends Activity {
             }
             fitImageRect();
             canvas.drawBitmap(bitmap, null, imageRect, null);
-            if (!aiDrawnPoints.isEmpty()) {
-                Path path = new Path();
-                PointF first = imageToView(aiDrawnPoints.get(0));
-                path.moveTo(first.x, first.y);
-                for (int i = 1; i < aiDrawnPoints.size(); i++) {
-                    PointF point = imageToView(aiDrawnPoints.get(i));
-                    path.lineTo(point.x, point.y);
-                }
-                paint.setStyle(Paint.Style.STROKE);
-                paint.setStrokeWidth(dp(5));
-                paint.setStrokeCap(Paint.Cap.ROUND);
-                paint.setStrokeJoin(Paint.Join.ROUND);
-                paint.setColor(Color.rgb(0, 255, 70));
-                canvas.drawPath(path, paint);
-                if (aiDrawnPoints.size() > 2) {
-                    PointF last = imageToView(aiDrawnPoints.get(aiDrawnPoints.size() - 1));
-                    paint.setStrokeWidth(dp(2));
-                    paint.setColor(Color.argb(150, 255, 255, 255));
-                    canvas.drawLine(last.x, last.y, first.x, first.y, paint);
-                }
-                paint.setStyle(Paint.Style.FILL);
-                for (int i = 0; i < aiDrawnPoints.size(); i++) {
-                    PointF point = imageToView(aiDrawnPoints.get(i));
-                    paint.setColor(i == 0 ? Color.RED : Color.rgb(0, 255, 70));
-                    canvas.drawCircle(point.x, point.y, i == 0 ? dp(7) : dp(4), paint);
-                }
-            }
+            drawImageTrace(canvas);
         }
 
         @Override public boolean onTouchEvent(android.view.MotionEvent event) {
             if (bitmap == null) return true;
-            if (event.getAction() == android.view.MotionEvent.ACTION_DOWN || event.getAction() == android.view.MotionEvent.ACTION_MOVE || event.getAction() == android.view.MotionEvent.ACTION_UP) {
+            if (event.getAction() == android.view.MotionEvent.ACTION_DOWN || event.getAction() == android.view.MotionEvent.ACTION_MOVE) {
                 fitImageRect();
                 if (!imageRect.contains(event.getX(), event.getY())) return true;
-                PointF imagePoint = new PointF((event.getX() - imageRect.left) / imageRect.width() * bitmap.getWidth(), (event.getY() - imageRect.top) / imageRect.height() * bitmap.getHeight());
-                if (aiDrawnPoints.isEmpty() || Math.hypot(imagePoint.x - aiDrawnPoints.get(aiDrawnPoints.size() - 1).x, imagePoint.y - aiDrawnPoints.get(aiDrawnPoints.size() - 1).y) >= 6) {
-                    aiDrawnPoints.add(imagePoint);
+                PointF viewPoint = new PointF(event.getX(), event.getY());
+                if (aiDrawnPoints.isEmpty() || Math.hypot(viewPoint.x - aiDrawnPoints.get(aiDrawnPoints.size() - 1).x, viewPoint.y - aiDrawnPoints.get(aiDrawnPoints.size() - 1).y) >= dp(2)) {
+                    aiDrawnPoints.add(viewPoint);
                     updateAITraceMessage();
                 }
                 invalidate();
@@ -1482,8 +1456,32 @@ public class MainActivity extends Activity {
             return true;
         }
 
-        private PointF imageToView(PointF point) {
-            return new PointF(imageRect.left + point.x / bitmap.getWidth() * imageRect.width(), imageRect.top + point.y / bitmap.getHeight() * imageRect.height());
+        private void drawImageTrace(Canvas canvas) {
+            if (aiDrawnPoints.isEmpty()) return;
+            paint.setTextAlign(Paint.Align.LEFT);
+            paint.setStyle(Paint.Style.STROKE);
+            paint.setStrokeWidth(dp(5));
+            paint.setStrokeCap(Paint.Cap.ROUND);
+            paint.setStrokeJoin(Paint.Join.ROUND);
+            paint.setColor(Color.rgb(0, 255, 70));
+            for (int i = 1; i < aiDrawnPoints.size(); i++) {
+                PointF previous = aiDrawnPoints.get(i - 1);
+                PointF current = aiDrawnPoints.get(i);
+                canvas.drawLine(previous.x, previous.y, current.x, current.y, paint);
+            }
+            if (aiDrawnPoints.size() > 2) {
+                PointF first = aiDrawnPoints.get(0);
+                PointF last = aiDrawnPoints.get(aiDrawnPoints.size() - 1);
+                paint.setStrokeWidth(dp(2));
+                paint.setColor(Color.argb(150, 255, 255, 255));
+                canvas.drawLine(last.x, last.y, first.x, first.y, paint);
+            }
+            paint.setStyle(Paint.Style.FILL);
+            for (int i = 0; i < aiDrawnPoints.size(); i++) {
+                PointF point = aiDrawnPoints.get(i);
+                paint.setColor(i == 0 ? Color.RED : Color.rgb(0, 255, 70));
+                canvas.drawCircle(point.x, point.y, i == 0 ? dp(7) : dp(4), paint);
+            }
         }
 
         private void fitImageRect() {

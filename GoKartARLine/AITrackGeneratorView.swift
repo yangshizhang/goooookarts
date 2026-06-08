@@ -74,16 +74,16 @@ struct AITrackGeneratorView: View {
             ZStack {
                 RoundedRectangle(cornerRadius: 16)
                     .fill(.black)
-                if let selectedImage {
-                    Image(uiImage: selectedImage)
+                if let image = selectedImage {
+                    Image(uiImage: image)
                         .resizable()
                         .scaledToFit()
-                        .overlay {
-                            traceOverlay(container: proxy.size, imageSize: selectedImage.size)
-                        }
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    traceCanvas
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .contentShape(Rectangle())
                         .gesture(DragGesture(minimumDistance: 0).onChanged { value in
-                            addTracePoint(value.location, container: proxy.size, imageSize: selectedImage.size)
+                            addTracePoint(value.location, container: proxy.size, imageSize: image.size)
                         })
                 } else {
                     VStack(spacing: 8) {
@@ -98,29 +98,30 @@ struct AITrackGeneratorView: View {
         .frame(minHeight: 300)
     }
 
-    private func traceOverlay(container: CGSize, imageSize: CGSize) -> some View {
+    private var traceCanvas: some View {
         Canvas { context, _ in
-            guard tracedPoints.count > 1 else { return }
-            var path = Path()
-            path.move(to: viewPoint(from: tracedPoints[0], container: container, imageSize: imageSize))
-            for point in tracedPoints.dropFirst() {
-                path.addLine(to: viewPoint(from: point, container: container, imageSize: imageSize))
+            guard !tracedPoints.isEmpty else { return }
+            if tracedPoints.count > 1 {
+                var path = Path()
+                path.move(to: tracedPoints[0])
+                for point in tracedPoints.dropFirst() {
+                    path.addLine(to: point)
+                }
+                context.stroke(path, with: .color(.green), style: StrokeStyle(lineWidth: 5, lineCap: .round, lineJoin: .round))
+                if let first = tracedPoints.first, let last = tracedPoints.last, tracedPoints.count > 2 {
+                    var closing = Path()
+                    closing.move(to: last)
+                    closing.addLine(to: first)
+                    context.stroke(closing, with: .color(.white.opacity(0.45)), style: StrokeStyle(lineWidth: 2, dash: [6, 6]))
+                }
             }
-            context.stroke(path, with: .color(.green), style: StrokeStyle(lineWidth: 5, lineCap: .round, lineJoin: .round))
-            if let first = tracedPoints.first, let last = tracedPoints.last, tracedPoints.count > 2 {
-                var closing = Path()
-                closing.move(to: viewPoint(from: last, container: container, imageSize: imageSize))
-                closing.addLine(to: viewPoint(from: first, container: container, imageSize: imageSize))
-                context.stroke(closing, with: .color(.white.opacity(0.45)), style: StrokeStyle(lineWidth: 2, dash: [6, 6]))
-            }
-        }
-        .overlay {
-            ForEach(Array(tracedPoints.enumerated()), id: \.offset) { index, point in
-                Circle()
-                    .fill(index == 0 ? .red : .green)
-                    .frame(width: index == 0 ? 14 : 8, height: index == 0 ? 14 : 8)
-                    .overlay(Circle().stroke(.white.opacity(index == 0 ? 1 : 0), lineWidth: 2))
-                    .position(viewPoint(from: point, container: container, imageSize: imageSize))
+            for (index, point) in tracedPoints.enumerated() {
+                let radius: CGFloat = index == 0 ? 7 : 4
+                let rect = CGRect(x: point.x - radius, y: point.y - radius, width: radius * 2, height: radius * 2)
+                context.fill(Path(ellipseIn: rect), with: .color(index == 0 ? .red : .green))
+                if index == 0 {
+                    context.stroke(Path(ellipseIn: rect), with: .color(.white), lineWidth: 2)
+                }
             }
         }
     }
@@ -154,9 +155,9 @@ struct AITrackGeneratorView: View {
     }
 
     private func addTracePoint(_ location: CGPoint, container: CGSize, imageSize: CGSize) {
-        guard let point = imagePointIfInside(location, container: container, imageSize: imageSize) else { return }
-        if let last = tracedPoints.last, hypot(point.x - last.x, point.y - last.y) < 6 { return }
-        tracedPoints.append(point)
+        guard imageRect(imageSize: imageSize, container: container).contains(location) else { return }
+        if let last = tracedPoints.last, hypot(location.x - last.x, location.y - last.y) < 2 { return }
+        tracedPoints.append(location)
         updateTraceMessage()
     }
 
@@ -164,21 +165,10 @@ struct AITrackGeneratorView: View {
         message = tracedPoints.isEmpty ? "沿赛道中心线描一圈。" : "已记录 \(tracedPoints.count) 个描线点。越贴近中心线，生成越准。"
     }
 
-    private func aspectFitRect(imageSize: CGSize, container: CGSize) -> CGRect {
+    private func imageRect(imageSize: CGSize, container: CGSize) -> CGRect {
         guard imageSize.width > 0, imageSize.height > 0, container.width > 0, container.height > 0 else { return .zero }
         let scale = min(container.width / imageSize.width, container.height / imageSize.height)
         let fitted = CGSize(width: imageSize.width * scale, height: imageSize.height * scale)
         return CGRect(x: (container.width - fitted.width) / 2, y: (container.height - fitted.height) / 2, width: fitted.width, height: fitted.height)
-    }
-
-    private func imagePointIfInside(_ viewPoint: CGPoint, container: CGSize, imageSize: CGSize) -> CGPoint? {
-        let rect = aspectFitRect(imageSize: imageSize, container: container)
-        guard rect.contains(viewPoint) else { return nil }
-        return CGPoint(x: (viewPoint.x - rect.minX) / max(rect.width, 1) * imageSize.width, y: (viewPoint.y - rect.minY) / max(rect.height, 1) * imageSize.height)
-    }
-
-    private func viewPoint(from imagePoint: CGPoint, container: CGSize, imageSize: CGSize) -> CGPoint {
-        let rect = aspectFitRect(imageSize: imageSize, container: container)
-        return CGPoint(x: rect.minX + imagePoint.x / max(imageSize.width, 1) * rect.width, y: rect.minY + imagePoint.y / max(imageSize.height, 1) * rect.height)
     }
 }
