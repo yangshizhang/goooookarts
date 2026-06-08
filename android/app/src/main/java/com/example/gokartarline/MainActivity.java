@@ -399,13 +399,31 @@ public class MainActivity extends Activity {
 
     private String brakingDistanceText() {
         if (latestLocation == null || selectedTrack < 0 || selectedTrack >= tracks.size()) return "--";
-        double best = Double.MAX_VALUE;
+        TrackData track = tracks.get(selectedTrack);
         TrackPoint current = new TrackPoint(latestLocation.getLatitude(), latestLocation.getLongitude(), 0, "green");
-        for (TrackPoint point : tracks.get(selectedTrack).points) {
-            if (!"red".equals(point.color)) continue;
-            best = Math.min(best, distanceMeters(current, point));
+        TrackProjection projection = nearestProjection(current, track.points);
+        if (projection == null) return "--";
+        double distance = distanceToNextColor(track.points, projection, "red", 300);
+        return distance < 0 ? "--" : ((int) distance) + " m";
+    }
+
+    private double distanceToNextColor(List<TrackPoint> points, TrackProjection projection, String targetColor, double maxDistance) {
+        int segmentCount = Math.max(closesLoop(points) ? points.size() : points.size() - 1, 1);
+        int segmentIndex = Math.min(Math.max(projection.segmentIndex, 0), segmentCount - 1);
+        TrackPoint previous = new TrackPoint(projection.latitude, projection.longitude, 0, colorAtSegment(points, segmentIndex, trackDirectionReversed));
+        double distance = 0;
+        int guard = 0;
+        while (distance <= maxDistance && guard < points.size() + 2) {
+            int pointIndex = trackDirectionReversed ? segmentIndex : (segmentIndex + 1) % points.size();
+            TrackPoint point = points.get(pointIndex);
+            double segmentLength = distanceMeters(previous, point);
+            distance += segmentLength;
+            if (targetColor.equals(point.color)) return distance;
+            previous = point;
+            segmentIndex = advanceSegmentIndex(segmentIndex, segmentCount, trackDirectionReversed);
+            guard++;
         }
-        return best == Double.MAX_VALUE ? "--" : ((int) best) + " m";
+        return -1;
     }
 
     private String lineDeviationText() {
@@ -416,14 +434,57 @@ public class MainActivity extends Activity {
     private TrackPoint nearestTrackPoint() {
         if (selectedTrack < 0 || selectedTrack >= tracks.size() || tracks.get(selectedTrack).points.isEmpty()) return null;
         if (latestLocation == null) return tracks.get(selectedTrack).points.get(0);
+        TrackData track = tracks.get(selectedTrack);
         TrackPoint current = new TrackPoint(latestLocation.getLatitude(), latestLocation.getLongitude(), 0, "green");
-        TrackPoint nearest = null;
-        double best = Double.MAX_VALUE;
-        for (TrackPoint point : tracks.get(selectedTrack).points) {
-            double distance = distanceMeters(current, point);
-            if (distance < best) { best = distance; nearest = point; }
+        TrackProjection projection = nearestProjection(current, track.points);
+        return projection == null ? track.points.get(0) : trackPointAhead(track.points, projection, Math.max(2, drivingLeadMeters()));
+    }
+
+    private TrackPoint trackPointAhead(List<TrackPoint> points, TrackProjection projection, double lookAheadMeters) {
+        int segmentCount = Math.max(closesLoop(points) ? points.size() : points.size() - 1, 1);
+        int segmentIndex = Math.min(Math.max(projection.segmentIndex, 0), segmentCount - 1);
+        TrackPoint current = new TrackPoint(projection.latitude, projection.longitude, 0, colorAtSegment(points, segmentIndex, trackDirectionReversed));
+        double remaining = lookAheadMeters;
+        int guard = 0;
+        while (remaining > 0 && guard < points.size() + 2) {
+            int pointIndex = trackDirectionReversed ? segmentIndex : (segmentIndex + 1) % points.size();
+            TrackPoint target = points.get(pointIndex);
+            double segmentLength = distanceMeters(current, target);
+            if (segmentLength >= remaining && segmentLength > 0.001) {
+                double ratio = remaining / segmentLength;
+                return new TrackPoint(
+                        current.latitude + (target.latitude - current.latitude) * ratio,
+                        current.longitude + (target.longitude - current.longitude) * ratio,
+                        target.speed,
+                        target.color
+                );
+            }
+            remaining -= segmentLength;
+            current = target;
+            segmentIndex = advanceSegmentIndex(segmentIndex, segmentCount, trackDirectionReversed);
+            guard++;
         }
-        return nearest;
+        return current;
+    }
+
+    private int advanceSegmentIndex(int segmentIndex, int segmentCount, boolean reversed) {
+        if (reversed) {
+            segmentIndex--;
+            return segmentIndex < 0 ? segmentCount - 1 : segmentIndex;
+        }
+        segmentIndex++;
+        return segmentIndex >= segmentCount ? 0 : segmentIndex;
+    }
+
+    private double drivingLeadMeters() {
+        if (latestLocation == null || !latestLocation.hasSpeed()) return 0;
+        return Math.min(Math.max(latestLocation.getSpeed() * 0.45, 0), 8);
+    }
+
+    private String colorAtSegment(List<TrackPoint> points, int segmentIndex, boolean reversed) {
+        if (points.isEmpty()) return "green";
+        int index = reversed ? Math.max(0, Math.min(segmentIndex, points.size() - 1)) : Math.max(0, Math.min((segmentIndex + 1) % points.size(), points.size() - 1));
+        return points.get(index).color;
     }
 
     private String drivingHint(String color) {
@@ -1401,7 +1462,27 @@ public class MainActivity extends Activity {
     private double normalizedDegrees(double degrees) { double value = degrees % 360.0; return value < 0 ? value + 360.0 : value; }
     private double angleDeltaDegrees(double a, double b) { double delta = Math.abs(normalizedDegrees(a) - normalizedDegrees(b)) % 360.0; return delta > 180 ? 360 - delta : delta; }
     private double bearingDegrees(TrackPoint start, TrackPoint end) { double lat1 = Math.toRadians(start.latitude), lat2 = Math.toRadians(end.latitude), dLon = Math.toRadians(end.longitude - start.longitude); double y = Math.sin(dLon) * Math.cos(lat2); double x = Math.cos(lat1) * Math.sin(lat2) - Math.sin(lat1) * Math.cos(lat2) * Math.cos(dLon); return normalizedDegrees(Math.toDegrees(Math.atan2(y, x))); }
-    private TrackProjection nearestProjection(TrackPoint point, List<TrackPoint> points) { if (points.size() < 2) return null; double latScale = Math.PI / 180.0 * 6371000.0; double lonScale = latScale * Math.cos(Math.toRadians(point.latitude)); TrackProjection best = null; for (int i = 1; i < points.size(); i++) { TrackPoint start = points.get(i - 1), end = points.get(i); double ax = (start.longitude - point.longitude) * lonScale, ay = (start.latitude - point.latitude) * latScale, bx = (end.longitude - point.longitude) * lonScale, by = (end.latitude - point.latitude) * latScale; double dx = bx - ax, dy = by - ay, lengthSquared = dx * dx + dy * dy; double progress = lengthSquared > 0 ? Math.max(0, Math.min(1, -(ax * dx + ay * dy) / lengthSquared)) : 0; double nearestX = ax + dx * progress, nearestY = ay + dy * progress; double distance = Math.sqrt(nearestX * nearestX + nearestY * nearestY); double latitude = start.latitude + (end.latitude - start.latitude) * progress; double longitude = start.longitude + (end.longitude - start.longitude) * progress; TrackProjection projection = new TrackProjection(i - 1, progress, latitude, longitude, distance, bearingDegrees(start, end)); if (best == null || projection.distanceMeters < best.distanceMeters) best = projection; } return best; }
+    private boolean closesLoop(List<TrackPoint> points) { return points.size() > 2 && distanceMeters(points.get(0), points.get(points.size() - 1)) <= 80; }
+    private TrackProjection nearestProjection(TrackPoint point, List<TrackPoint> points) {
+        if (points.size() < 2) return null;
+        double latScale = Math.PI / 180.0 * 6371000.0;
+        double lonScale = latScale * Math.cos(Math.toRadians(point.latitude));
+        int segmentCount = closesLoop(points) ? points.size() : points.size() - 1;
+        TrackProjection best = null;
+        for (int i = 0; i < segmentCount; i++) {
+            TrackPoint start = points.get(i), end = points.get((i + 1) % points.size());
+            double ax = (start.longitude - point.longitude) * lonScale, ay = (start.latitude - point.latitude) * latScale, bx = (end.longitude - point.longitude) * lonScale, by = (end.latitude - point.latitude) * latScale;
+            double dx = bx - ax, dy = by - ay, lengthSquared = dx * dx + dy * dy;
+            double progress = lengthSquared > 0 ? Math.max(0, Math.min(1, -(ax * dx + ay * dy) / lengthSquared)) : 0;
+            double nearestX = ax + dx * progress, nearestY = ay + dy * progress;
+            double distance = Math.sqrt(nearestX * nearestX + nearestY * nearestY);
+            double latitude = start.latitude + (end.latitude - start.latitude) * progress;
+            double longitude = start.longitude + (end.longitude - start.longitude) * progress;
+            TrackProjection projection = new TrackProjection(i, progress, latitude, longitude, distance, bearingDegrees(start, end));
+            if (best == null || projection.distanceMeters < best.distanceMeters) best = projection;
+        }
+        return best;
+    }
 
     final class MapDrawerView extends LinearLayout {
         DrawCanvas canvas;
@@ -2389,16 +2470,16 @@ public class MainActivity extends Activity {
         @Override protected void onDraw(Canvas canvas) {
             super.onDraw(canvas);
             if (track.size() < 2) return;
-            List<PointF> pts = projectTrack();
+            List<ProjectedLinePoint> pts = projectTrack();
             for (int i = 0; i < pts.size() - 1; i++) {
                 float baseAlpha = i < pts.size() * 0.45f ? 1f : Math.max(0.1f, 1f - (i / (float) pts.size()));
                 float alpha = (float) (baseAlpha * opacity);
-                paint.setColor(colorFor(track.get(i % track.size()).color, alpha));
-                canvas.drawLine(pts.get(i).x, pts.get(i).y + verticalOffset, pts.get(i + 1).x, pts.get(i + 1).y + verticalOffset, paint);
+                paint.setColor(colorFor(pts.get(i).color, alpha));
+                canvas.drawLine(pts.get(i).point.x, pts.get(i).point.y + verticalOffset, pts.get(i + 1).point.x, pts.get(i + 1).point.y + verticalOffset, paint);
             }
         }
 
-        List<PointF> projectTrack() {
+        List<ProjectedLinePoint> projectTrack() {
             if (smartCalibrationActive && latestLocation != null) {
                 TrackPoint current = new TrackPoint(latestLocation.getLatitude(), latestLocation.getLongitude(), 0, "green");
                 TrackProjection projection = nearestProjection(current, track);
@@ -2410,34 +2491,38 @@ public class MainActivity extends Activity {
             double metersPerPixel = Math.max(renderDistance / Math.max(getHeight() * 0.72, 1), 0.1);
             float centerX = getWidth() / 2f;
             float startY = getHeight() * 0.86f;
-            ArrayList<PointF> result = new ArrayList<>();
+            ArrayList<ProjectedLinePoint> result = new ArrayList<>();
             double distance = 0;
             for (int i = 0; i < track.size() && distance <= renderDistance; i++) {
                 TrackPoint point = track.get(i);
                 if (i > 0) distance += distanceMeters(track.get(i - 1), point);
                 float x = centerX + (float) (((point.longitude - origin.longitude) * lonScale) / metersPerPixel);
                 float y = startY - (float) (Math.abs((point.latitude - origin.latitude) * latScale) / metersPerPixel);
-                result.add(new PointF(x, y));
+                result.add(new ProjectedLinePoint(new PointF(x, y), point.color));
             }
             if (result.size() < 2) {
-                result.add(new PointF(centerX, startY));
-                result.add(new PointF(centerX, startY - getHeight() * 0.55f));
+                result.add(new ProjectedLinePoint(new PointF(centerX, startY), "green"));
+                result.add(new ProjectedLinePoint(new PointF(centerX, startY - getHeight() * 0.55f), "green"));
             }
             return result;
         }
 
-        List<PointF> projectTrackFromProjection(TrackProjection projection) {
+        List<ProjectedLinePoint> projectTrackFromProjection(TrackProjection projection) {
             double latScale = 111320.0;
             double lonScale = Math.max(Math.cos(Math.toRadians(projection.latitude)) * 111320.0, 1.0);
             double metersPerPixel = Math.max(renderDistance / Math.max(getHeight() * 0.72, 1), 0.1);
             float centerX = getWidth() / 2f;
             float startY = getHeight() * 0.86f;
-            ArrayList<PointF> result = new ArrayList<>();
-            TrackPoint anchor = new TrackPoint(projection.latitude, projection.longitude, 0, "green");
-            double headingRadians = Math.toRadians(trackDirectionReversed ? normalizedDegrees(projection.headingDegrees + 180) : projection.headingDegrees);
-            result.add(new PointF(centerX, startY));
-            int segmentCount = Math.max(track.size() - 1, 1);
+            ArrayList<ProjectedLinePoint> result = new ArrayList<>();
+            int segmentCount = Math.max(closesLoop(track) ? track.size() : track.size() - 1, 1);
             int segmentIndex = Math.min(Math.max(projection.segmentIndex, 0), segmentCount - 1);
+            RouteAnchor routeAnchor = predictedAnchor(projection, segmentIndex, segmentCount);
+            TrackPoint anchor = routeAnchor.point;
+            segmentIndex = routeAnchor.segmentIndex;
+            int nextIndex = trackDirectionReversed ? segmentIndex : (segmentIndex + 1) % track.size();
+            double headingDegrees = bearingDegrees(anchor, track.get(nextIndex));
+            double headingRadians = Math.toRadians(headingDegrees);
+            result.add(new ProjectedLinePoint(new PointF(centerX, startY), colorAtSegment(segmentIndex, trackDirectionReversed)));
             TrackPoint previous = anchor;
             double distance = 0;
             int guard = 0;
@@ -2445,7 +2530,7 @@ public class MainActivity extends Activity {
                 int pointIndex = trackDirectionReversed ? segmentIndex : (segmentIndex + 1) % track.size();
                 TrackPoint point = track.get(pointIndex);
                 distance += distanceMeters(previous, point);
-                result.add(projectRelativePoint(point, anchor, headingRadians, latScale, lonScale, metersPerPixel, centerX, startY));
+                result.add(new ProjectedLinePoint(projectRelativePoint(point, anchor, headingRadians, latScale, lonScale, metersPerPixel, centerX, startY), point.color));
                 previous = point;
                 if (trackDirectionReversed) {
                     segmentIndex--;
@@ -2456,8 +2541,70 @@ public class MainActivity extends Activity {
                 }
                 guard++;
             }
-            if (result.size() < 2) result.add(new PointF(centerX, startY - getHeight() * 0.55f));
+            if (result.size() < 2) result.add(new ProjectedLinePoint(new PointF(centerX, startY - getHeight() * 0.55f), "green"));
             return result;
+        }
+
+        RouteAnchor predictedAnchor(TrackProjection projection, int segmentIndex, int segmentCount) {
+            TrackPoint current = new TrackPoint(projection.latitude, projection.longitude, 0, colorAtSegment(segmentIndex, trackDirectionReversed));
+            double remainingLead = predictedLeadMeters();
+            int guard = 0;
+            while (remainingLead > 0 && guard < track.size() + 2) {
+                int pointIndex = trackDirectionReversed ? segmentIndex : (segmentIndex + 1) % track.size();
+                TrackPoint target = track.get(pointIndex);
+                double segmentLength = distanceMeters(current, target);
+                if (segmentLength > remainingLead && segmentLength > 0.001) {
+                    double ratio = remainingLead / segmentLength;
+                    return new RouteAnchor(new TrackPoint(
+                            current.latitude + (target.latitude - current.latitude) * ratio,
+                            current.longitude + (target.longitude - current.longitude) * ratio,
+                            target.speed,
+                            target.color
+                    ), segmentIndex);
+                }
+                remainingLead -= segmentLength;
+                current = target;
+                if (trackDirectionReversed) {
+                    segmentIndex--;
+                    if (segmentIndex < 0) segmentIndex = segmentCount - 1;
+                } else {
+                    segmentIndex++;
+                    if (segmentIndex >= segmentCount) segmentIndex = 0;
+                }
+                guard++;
+            }
+            return new RouteAnchor(current, segmentIndex);
+        }
+
+        double predictedLeadMeters() {
+            if (latestLocation == null || !latestLocation.hasSpeed()) return 0;
+            return Math.min(Math.max(latestLocation.getSpeed() * 0.45, 0), 8);
+        }
+
+        String colorAtSegment(int segmentIndex, boolean reversed) {
+            if (track.isEmpty()) return "green";
+            int index = reversed ? Math.max(0, Math.min(segmentIndex, track.size() - 1)) : Math.max(0, Math.min((segmentIndex + 1) % track.size(), track.size() - 1));
+            return track.get(index).color;
+        }
+
+        final class RouteAnchor {
+            final TrackPoint point;
+            final int segmentIndex;
+
+            RouteAnchor(TrackPoint point, int segmentIndex) {
+                this.point = point;
+                this.segmentIndex = segmentIndex;
+            }
+        }
+
+        final class ProjectedLinePoint {
+            final PointF point;
+            final String color;
+
+            ProjectedLinePoint(PointF point, String color) {
+                this.point = point;
+                this.color = color;
+            }
         }
 
         PointF projectRelativePoint(TrackPoint point, TrackPoint anchor, double headingRadians, double latScale, double lonScale, double metersPerPixel, float centerX, float startY) {

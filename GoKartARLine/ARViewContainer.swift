@@ -146,7 +146,7 @@ struct ARViewContainer: UIViewRepresentable {
             let currentCoordinate = fusedPose?.coordinate ?? originCoordinate
             let vehicleWorldPosition = GeoConverter.arPosition(for: currentCoordinate, origin: originCoordinate)
             let vehicleLinePosition = vehicleWorldPosition.rotatedAroundY(degrees: mapHeadingOffsetDegrees)
-            let sourcePoints = resampledVisiblePoints(from: track, origin: originCoordinate, vehiclePosition: vehicleLinePosition)
+            let sourcePoints = resampledVisiblePoints(from: track, origin: originCoordinate, vehiclePosition: vehicleLinePosition, speed: fusedPose?.speed ?? 0)
 
             guard sourcePoints.count > 1 else {
                 lineNode.geometry = nil
@@ -156,59 +156,87 @@ struct ARViewContainer: UIViewRepresentable {
             lineNode.geometry = makeTriangleStripGeometry(points: cameraAlignedPoints(sourcePoints))
         }
 
-        private func resampledVisiblePoints(from track: TrackData, origin: CLLocationCoordinate2D, vehiclePosition: SCNVector3) -> [VisibleLinePoint] {
+        private func resampledVisiblePoints(from track: TrackData, origin: CLLocationCoordinate2D, vehiclePosition: SCNVector3, speed: Double) -> [VisibleLinePoint] {
             let points = track.points.map { point in
                 VisibleLinePoint(position: GeoConverter.arPosition(for: point.coordinate, origin: origin), color: point.color, distanceAhead: 0)
             }
-            guard points.count > 1, let nearest = nearestTrackProjection(in: points, to: vehiclePosition) else { return [] }
+            let closesLoop = points.count > 2 && (points[0].position - points[points.count - 1].position).horizontalLength <= 80
+            let segmentCount = closesLoop ? points.count : points.count - 1
+            guard points.count > 1, segmentCount > 0, let nearest = nearestTrackProjection(in: points, to: vehiclePosition, closesLoop: closesLoop) else { return [] }
 
             var visible: [VisibleLinePoint] = []
-            let segmentCount = points.count - 1
             var segmentIndex = nearest.segmentIndex
             var startPosition = nearest.position
             var startColor = nearest.color
             var distanceAhead: Float = 0
+            var leadDistance = Float(min(max(speed * 0.45, 0), 8))
+            var guardCount = 0
 
-            while distanceAhead <= maximumVisibleDistance {
+            while distanceAhead <= maximumVisibleDistance && guardCount < segmentCount + 2 {
                 let nextIndex = isTrackDirectionReversed ? segmentIndex : (segmentIndex + 1) % points.count
                 let endPoint = points[nextIndex]
                 let segment = endPoint.position - startPosition
                 let length = segment.length
                 if length > 0 {
-                    let steps = max(Int(ceil(length / 0.5)), 1)
+                    if leadDistance > 0 {
+                        if leadDistance >= length {
+                            leadDistance -= length
+                            distanceAhead = 0
+                        } else {
+                            let leadProgress = leadDistance / length
+                            startPosition = startPosition + segment * leadProgress
+                            startColor = VisibleLinePoint.interpolatedColor(from: startColor, to: endPoint.color, progress: leadProgress)
+                            leadDistance = 0
+                        }
+                        if leadDistance > 0 {
+                            advanceSegment(&segmentIndex, segmentCount: segmentCount, points: points, reversed: isTrackDirectionReversed, startPosition: &startPosition, startColor: &startColor)
+                            guardCount += 1
+                            continue
+                        }
+                    }
+                    let visibleSegment = endPoint.position - startPosition
+                    let visibleLength = visibleSegment.length
+                    let steps = max(Int(ceil(visibleLength / 0.5)), 1)
                     for step in 0...steps {
                         let progress = Float(step) / Float(steps)
-                        let sampleDistance = distanceAhead + length * progress
+                        let sampleDistance = distanceAhead + visibleLength * progress
                         guard sampleDistance <= maximumVisibleDistance else { break }
-                        let position = startPosition + segment * progress
+                        let position = startPosition + visibleSegment * progress
                         let color = VisibleLinePoint.interpolatedColor(from: startColor, to: endPoint.color, progress: progress)
                         visible.append(VisibleLinePoint(position: position, color: color, distanceAhead: sampleDistance))
                     }
-                    distanceAhead += length
+                    distanceAhead += visibleLength
                 }
-
-                if isTrackDirectionReversed {
-                    segmentIndex -= 1
-                    if segmentIndex < 0 { segmentIndex = segmentCount - 1 }
-                    startPosition = points[(segmentIndex + 1) % points.count].position
-                    startColor = points[(segmentIndex + 1) % points.count].color
-                } else {
-                    segmentIndex = nextIndex
-                    if segmentIndex >= segmentCount { segmentIndex = 0 }
-                    startPosition = points[segmentIndex].position
-                    startColor = points[segmentIndex].color
-                }
+                advanceSegment(&segmentIndex, segmentCount: segmentCount, points: points, reversed: isTrackDirectionReversed, startPosition: &startPosition, startColor: &startColor)
+                guardCount += 1
                 if segmentIndex == nearest.segmentIndex { break }
             }
 
             return visible
         }
 
-        private func nearestTrackProjection(in points: [VisibleLinePoint], to vehiclePosition: SCNVector3) -> TrackProjection? {
+        private func advanceSegment(_ segmentIndex: inout Int, segmentCount: Int, points: [VisibleLinePoint], reversed: Bool, startPosition: inout SCNVector3, startColor: inout SIMD3<Float>) {
+            if reversed {
+                segmentIndex -= 1
+                if segmentIndex < 0 { segmentIndex = segmentCount - 1 }
+                let point = points[(segmentIndex + 1) % points.count]
+                startPosition = point.position
+                startColor = point.color
+            } else {
+                segmentIndex += 1
+                if segmentIndex >= segmentCount { segmentIndex = 0 }
+                let point = points[segmentIndex % points.count]
+                startPosition = point.position
+                startColor = point.color
+            }
+        }
+
+        private func nearestTrackProjection(in points: [VisibleLinePoint], to vehiclePosition: SCNVector3, closesLoop: Bool) -> TrackProjection? {
             var best: TrackProjection?
-            for index in 0..<(points.count - 1) {
+            let segmentCount = closesLoop ? points.count : points.count - 1
+            for index in 0..<segmentCount {
                 let start = points[index]
-                let end = points[index + 1]
+                let end = points[(index + 1) % points.count]
                 let segment = end.position - start.position
                 let lengthSquared = max(segment.x * segment.x + segment.z * segment.z, 0.0001)
                 let relative = vehiclePosition - start.position

@@ -162,9 +162,11 @@ enum GeoConverter {
         guard points.count > 1 else { return nil }
         let current = wgs84ToUTM(latitude: coordinate.latitude, longitude: coordinate.longitude)
         var best: TrackCoordinateProjection?
-        for index in points.indices.dropFirst() {
-            let startPoint = points[index - 1]
-            let endPoint = points[index]
+        let closesLoop = points.count > 2 && distanceMeters(from: points[0].coordinate, to: points[points.count - 1].coordinate) <= 80
+        let segmentCount = closesLoop ? points.count : points.count - 1
+        for segmentIndex in 0..<segmentCount {
+            let startPoint = points[segmentIndex]
+            let endPoint = points[(segmentIndex + 1) % points.count]
             let start = wgs84ToUTM(latitude: startPoint.latitude, longitude: startPoint.longitude)
             let end = wgs84ToUTM(latitude: endPoint.latitude, longitude: endPoint.longitude)
             let dx = end.easting - start.easting
@@ -181,7 +183,7 @@ enum GeoConverter {
             let projection = TrackCoordinateProjection(
                 coordinate: projected,
                 distanceMeters: distance,
-                segmentIndex: index - 1,
+                segmentIndex: segmentIndex,
                 progress: progress,
                 headingDegrees: bearingDegrees(from: startPoint.coordinate, to: endPoint.coordinate)
             )

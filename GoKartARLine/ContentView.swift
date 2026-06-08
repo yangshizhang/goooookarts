@@ -144,13 +144,86 @@ struct ContentView: View {
 
     private var brakingDistanceText: String {
         guard let pose = locationManager.fusedPose, let track = trackDataManager.selectedTrack else { return "--" }
-        let nearest = track.points.filter { $0.color == .red }.map { GeoConverter.distanceMeters(from: pose.coordinate, to: $0.coordinate) }.min() ?? 0
-        return "\(Int(nearest)) m"
+        guard let projection = GeoConverter.nearestProjection(from: pose.coordinate, along: track.points) else { return "--" }
+        guard let distance = distanceToNextRed(from: projection, in: track.points, maxDistance: 300) else { return "--" }
+        return "\(Int(distance)) m"
     }
 
     private func nearestTrackPoint() -> TrackPoint? {
         guard let pose = locationManager.fusedPose, let track = trackDataManager.selectedTrack else { return nil }
-        return track.points.min { GeoConverter.distanceMeters(from: pose.coordinate, to: $0.coordinate) < GeoConverter.distanceMeters(from: pose.coordinate, to: $1.coordinate) }
+        guard let projection = GeoConverter.nearestProjection(from: pose.coordinate, along: track.points) else { return track.points.first }
+        return trackPointAhead(from: projection, in: track.points, distance: max(2, drivingLeadMeters))
+    }
+
+    private var drivingLeadMeters: Double {
+        min(max((locationManager.fusedPose?.speed ?? 0) * 0.45, 0), 8)
+    }
+
+    private func closesLoop(_ points: [TrackPoint]) -> Bool {
+        guard points.count > 2, let first = points.first, let last = points.last else { return false }
+        return GeoConverter.distanceMeters(from: first.coordinate, to: last.coordinate) <= 80
+    }
+
+    private func advanceSegmentIndex(_ index: Int, segmentCount: Int, reversed: Bool) -> Int {
+        if reversed {
+            let next = index - 1
+            return next < 0 ? segmentCount - 1 : next
+        }
+        let next = index + 1
+        return next >= segmentCount ? 0 : next
+    }
+
+    private func colorAtSegment(_ segmentIndex: Int, points: [TrackPoint], reversed: Bool) -> TrackPointColor {
+        guard !points.isEmpty else { return .green }
+        let index = reversed ? min(max(segmentIndex, 0), points.count - 1) : min(max((segmentIndex + 1) % points.count, 0), points.count - 1)
+        return points[index].color
+    }
+
+    private func trackPointAhead(from projection: TrackCoordinateProjection, in points: [TrackPoint], distance: Double) -> TrackPoint? {
+        guard !points.isEmpty else { return nil }
+        let segmentCount = max(closesLoop(points) ? points.count : points.count - 1, 1)
+        var segmentIndex = min(max(projection.segmentIndex, 0), segmentCount - 1)
+        var current = TrackPoint(latitude: projection.coordinate.latitude, longitude: projection.coordinate.longitude, speed: 0, color: colorAtSegment(segmentIndex, points: points, reversed: locationManager.isTrackDirectionReversed))
+        var remaining = distance
+        var guardCount = 0
+        while remaining > 0, guardCount < points.count + 2 {
+            let pointIndex = locationManager.isTrackDirectionReversed ? segmentIndex : (segmentIndex + 1) % points.count
+            let target = points[pointIndex]
+            let segmentLength = GeoConverter.distanceMeters(from: current.coordinate, to: target.coordinate)
+            if segmentLength >= remaining, segmentLength > 0.001 {
+                let ratio = remaining / segmentLength
+                return TrackPoint(
+                    latitude: current.latitude + (target.latitude - current.latitude) * ratio,
+                    longitude: current.longitude + (target.longitude - current.longitude) * ratio,
+                    speed: target.speed,
+                    color: target.color
+                )
+            }
+            remaining -= segmentLength
+            current = target
+            segmentIndex = advanceSegmentIndex(segmentIndex, segmentCount: segmentCount, reversed: locationManager.isTrackDirectionReversed)
+            guardCount += 1
+        }
+        return current
+    }
+
+    private func distanceToNextRed(from projection: TrackCoordinateProjection, in points: [TrackPoint], maxDistance: Double) -> Double? {
+        guard !points.isEmpty else { return nil }
+        let segmentCount = max(closesLoop(points) ? points.count : points.count - 1, 1)
+        var segmentIndex = min(max(projection.segmentIndex, 0), segmentCount - 1)
+        var current = TrackPoint(latitude: projection.coordinate.latitude, longitude: projection.coordinate.longitude, speed: 0, color: colorAtSegment(segmentIndex, points: points, reversed: locationManager.isTrackDirectionReversed))
+        var distance = 0.0
+        var guardCount = 0
+        while distance <= maxDistance, guardCount < points.count + 2 {
+            let pointIndex = locationManager.isTrackDirectionReversed ? segmentIndex : (segmentIndex + 1) % points.count
+            let target = points[pointIndex]
+            distance += GeoConverter.distanceMeters(from: current.coordinate, to: target.coordinate)
+            if target.color == .red { return distance }
+            current = target
+            segmentIndex = advanceSegmentIndex(segmentIndex, segmentCount: segmentCount, reversed: locationManager.isTrackDirectionReversed)
+            guardCount += 1
+        }
+        return nil
     }
 }
 
